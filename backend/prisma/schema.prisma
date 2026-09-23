@@ -1,0 +1,186 @@
+// Dhaka Tesla Pool - database schema
+// Relational (Postgres) chosen for pooling/capacity integrity: FK + constraints + row locks.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  passenger
+  driver
+}
+
+enum RideStatus {
+  REQUESTED
+  MATCHED
+  DRIVER_ARRIVED
+  STARTED
+  COMPLETED
+  CANCELLED
+}
+
+enum PoolStatus {
+  REQUESTED
+  MATCHED
+  DRIVER_ARRIVED
+  STARTED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  cash
+  teslapay
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  refunded
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  vehicles     Vehicle[]
+  rideRequests RideRequest[]
+  rideEvents   RideEvent[]
+
+  @@map("users")
+}
+
+model Vehicle {
+  id        Int      @id @default(autoincrement())
+  driverId  Int      @map("driver_id")
+  name      String // e.g. "Bullet"
+  capacity  Int // seats - never exceeded (DB CHECK + atomic UPDATE)
+  plate     String?
+  isOnline  Boolean  @default(false) @map("is_online")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  driver User   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  pools  Pool[]
+
+  @@index([driverId])
+  @@map("vehicles")
+}
+
+model Area {
+  id   Int    @id @default(autoincrement())
+  name String @unique // Banani, Gulshan, Mohakhali, ...
+  lat  Float
+  lng  Float
+
+  pickupRequests RideRequest[] @relation("pickupArea")
+  destRequests   RideRequest[] @relation("destArea")
+
+  @@map("areas")
+}
+
+model RideRequest {
+  id             Int       @id @default(autoincrement())
+  passengerId    Int       @map("passenger_id")
+  pickupAreaId   Int       @map("pickup_area_id")
+  destAreaId     Int       @map("dest_area_id")
+  seatsRequested Int       @default(1) @map("seats_requested")
+  status         RideStatus @default(REQUESTED)
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  passenger User      @relation(fields: [passengerId], references: [id], onDelete: Cascade)
+  pickupArea Area     @relation("pickupArea", fields: [pickupAreaId], references: [id])
+  destArea   Area     @relation("destArea", fields: [destAreaId], references: [id])
+
+  poolMembers PoolMember[]
+  fare        Fare?
+
+  @@index([passengerId])
+  @@index([status])
+  @@map("ride_requests")
+}
+
+model Pool {
+  id          Int        @id @default(autoincrement())
+  vehicleId   Int        @map("vehicle_id")
+  status      PoolStatus @default(REQUESTED)
+  capacity    Int // snapshot of vehicle capacity at pool creation
+  seatsTaken  Int        @default(0) @map("seats_taken")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  startedAt   DateTime?  @map("started_at")
+  completedAt DateTime?  @map("completed_at")
+
+  vehicle  Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  members  PoolMember[]
+  events   RideEvent[]
+
+  // capacity guard lives in the UPDATE statement (atomic) + this CHECK as a second net
+  @@index([status])
+  @@index([vehicleId])
+  @@map("pools")
+}
+
+model PoolMember {
+  id        Int      @id @default(autoincrement())
+  poolId    Int      @map("pool_id")
+  requestId Int      @unique @map("request_id")
+  seats     Int      @default(1)
+  farePaisa Int      @map("fare_paisa") // individual fare for this passenger
+  createdAt DateTime @default(now()) @map("created_at")
+
+  pool    Pool        @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  request RideRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([poolId])
+  @@map("pool_members")
+}
+
+model Fare {
+  id            Int     @id @default(autoincrement())
+  requestId     Int     @unique @map("request_id")
+  basePaisa     Int     @map("base_paisa")
+  distancePaisa Int     @map("distance_paisa")
+  discountPaisa Int     @default(0) @map("discount_paisa")
+  totalPaisa    Int     @map("total_paisa") // INTEGER paisa - no floats
+  distanceKm    Float   @map("distance_km")
+
+  request RideRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  payment Payment?
+
+  @@map("fares")
+}
+
+model RideEvent {
+  id         Int      @id @default(autoincrement())
+  poolId     Int      @map("pool_id")
+  actorId    Int      @map("actor_id")
+  fromStatus String   @map("from_status")
+  toStatus   String   @map("to_status")
+  note       String?
+  at         DateTime @default(now())
+
+  pool  Pool @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([poolId, at])
+  @@map("ride_events")
+}
+
+model Payment {
+  id     Int           @id @default(autoincrement())
+  fareId Int           @unique @map("fare_id")
+  method PaymentMethod @default(cash)
+  status PaymentStatus @default(pending)
+
+  fare Fare @relation(fields: [fareId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
