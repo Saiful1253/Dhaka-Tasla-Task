@@ -30,8 +30,8 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://postgres:postgres@db:5432/dhaka_tesla_pool?schema=public
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me-before-production}
-      BASE_FARE_PAISA: ${BASE_FARE_PAISA:-5000}
-      RATE_PER_KM_PAISA: ${RATE_PER_KM_PAISA:-1500}
+      BASE_FARE_TAKA: ${BASE_FARE_TAKA:-50}
+      RATE_PER_KM_TAKA: ${RATE_PER_KM_TAKA:-15}
       POOL_DISCOUNT_PCT: ${POOL_DISCOUNT_PCT:-20}
     ports:
       - "4000:4000"

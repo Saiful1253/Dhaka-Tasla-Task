@@ -8,7 +8,6 @@ import { areCompatible } from "../lib/matching";
 import { assertCancellable } from "../lib/transitions";
 
 export const rideRouter = Router();
-rideRouter.use(requireAuth);
 
 /** GET /areas - the predefined Dhaka zone list (no map API, PRD section 4) */
 export const areaRouter = Router();
@@ -63,15 +62,15 @@ rideRouter.get("/estimate", async (req, res, next) => {
       seats,
       poolSize,
       currency: "BDT",
-      unit: "paisa",
+      unit: "Taka",
       ...fare,
-      /** same maths in taka for humans */
-      totalTaka: (fare.totalPaisa / 100).toFixed(2),
     });
   } catch (e) {
     next(e);
   }
 });
+
+rideRouter.use(requireAuth);
 
 /** POST /rides - passenger requests a ride (status: REQUESTED) */
 rideRouter.post("/", async (req, res, next) => {
@@ -94,10 +93,10 @@ rideRouter.post("/", async (req, res, next) => {
         status: "REQUESTED",
         fare: {
           create: {
-            basePaisa: fare.basePaisa,
-            distancePaisa: fare.distancePaisa,
-            discountPaisa: 0,
-            totalPaisa: fare.totalPaisa,
+            baseTaka: fare.baseTaka,
+            distanceTaka: fare.distanceTaka,
+            discountTaka: 0,
+            totalTaka: fare.totalTaka,
             distanceKm: fare.distanceKm,
           },
         },

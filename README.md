@@ -65,7 +65,7 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 Some requirements were intentionally left open. These are the assumptions made, documented, and applied consistently:
 
 1. **Matching rule:** two requests may share a vehicle if they have the **same pickup area** *OR* their pickup→destination corridors overlap (both heading the same general direction). Nusrat (Banani→Mohakhali) and Rafiq (Banani→Gulshan 1) both start in Banani heading south/east → compatible. Shirin matches the corridor but is bounded by remaining seats.
-2. **Money is stored as integer paisa (৳ × 100).** No floats/decimals — avoids floating-point drift, keeps the fare exactly hand-verifiable, and scales cleanly if the currency ever had sub-unit precision.
+2. **Money is stored as whole Taka (৳).** Values are integers — avoids floating-point drift and keeps fares exact and hand-verifiable.
 3. **Cancellation is allowed only in `REQUESTED` or `MATCHED`** (i.e. before the driver arrives). Once `DRIVER_ARRIVED` the trip is considered committed; only the driver/admin could cancel.
 4. **One active pool per vehicle at a time.** A vehicle's pool must reach `COMPLETED`/`CANCELLED` before a new one opens — keeps capacity accounting trivial and correct.
 5. **No real payment gateway.** Payment is Cash or a simulated **TeslaPay** wallet.
@@ -164,15 +164,15 @@ erDiagram
         int    pool_id FK
         int    request_id FK
         int    seats
-        int    fare_paisa   "individual fare"
+        int    fare_taka   "individual fare"
     }
     FARES {
         int    id PK
         int    request_id FK
-        int    base_paisa
-        int    distance_paisa
-        int    discount_paisa
-        int    total_paisa  "integer paisa, no floats"
+        int    base_taka
+        int    distance_taka
+        int    discount_taka
+        int    total_taka  "whole Taka"
     }
     RIDE_EVENTS {
         int    id PK
@@ -199,8 +199,8 @@ areas(id, name, lat, lng)                       -- Banani, Gulshan, Mohakhali, .
 ride_requests(id, passenger_id, pickup_area_id, dest_area_id, seats_requested,
               status[REQUESTED|MATCHED|DRIVER_ARRIVED|STARTED|COMPLETED|CANCELLED], created_at)
 pools(id, vehicle_id->vehicles, status, capacity, seats_taken, created_at, started_at, completed_at)
-pool_members(id, pool_id, request_id, seats, fare_paisa, status)
-fares(id, request_id, base_paisa, distance_paisa, discount_paisa, total_paisa)
+pool_members(id, pool_id, request_id, seats, fare_taka, status)
+fares(id, request_id, base_taka, distance_taka, discount_taka, total_taka)
 ride_events(id, pool_id, actor_id, from_status, to_status, note, at)   -- audit/history
 payments(id, fare_id, method[cash|teslapay], status)                    -- simulated
 ```
@@ -238,9 +238,9 @@ const TRANSITIONS = {
 
 ```
 distance_km     = haversine(pickup_area.lat/lng, dest_area.lat/lng)
-subtotal_paisa  = baseFare + round(distance_km * ratePerKm)
-poolDiscount    = poolSize >= 2 ? subtotal_paisa * DISCOUNT_PCT : 0
-passengerFare   = subtotal_paisa - poolDiscount      // stored as INTEGER PAISA
+subtotal_taka   = baseFare + round(distance_km * ratePerKm)
+poolDiscount    = poolSize >= 2 ? subtotal_taka * DISCOUNT_PCT : 0
+passengerFare   = subtotal_taka - poolDiscount        // stored in whole Taka
 ```
 
 ---
@@ -344,7 +344,7 @@ npm test             # runs vitest against DATABASE_URL (needs Postgres up)
 Tests cover exactly what is risky:
 1. Bullet's capacity can never be exceeded (+ DB CHECK as second net)
 2. Invalid state transitions are rejected (409 INVALID_TRANSITION)
-3. Nusrat's and Rafiq's pooled fares calculate correctly (integer paisa)
+3. Nusrat's and Rafiq's pooled fares calculate correctly (whole Taka)
 4. Users cannot modify another user's ride (403)
 5. Cancellation rules hold (releases seats; blocked once STARTED)
 6. Two concurrent requests cannot corrupt pool capacity (`Promise.all` race → one 201, one 409)
@@ -380,7 +380,7 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/areas` | any | predefined Dhaka zone list (id, name, lat, lng) |
-| GET | `/rides/estimate?pickup=&dest=&seats=&poolSize=` | any | hand-testable fare breakdown (paisa) |
+| GET | `/rides/estimate?pickup=&dest=&seats=&poolSize=` | any | hand-testable fare breakdown (Taka) |
 
 ### Rides (passenger)
 | Method | Path | Auth | Description |
@@ -400,7 +400,7 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 | GET | `/driver/pools` | driver | my pools, passengers, seats, events |
 | POST | `/driver/pools/:id/arrived\|start\|complete\|cancel` | driver (owner) | guarded lifecycle → 409 on illegal move |
 | POST | `/pools/:id/join` | passenger (owner) | join with own request — atomic seat claim |
-| GET | `/pools/:id` | driver or member | roster + own fare only (`myFarePaisa`) |
+| GET | `/pools/:id` | driver or member | roster + own fare only (`myFareTaka`) |
 | GET | `/health` | — | liveness (Docker healthcheck) |
 
 ---
@@ -413,7 +413,7 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 | Atomic conditional `UPDATE` for seat claim | Read-then-write check | Single statement, DB-guaranteed; can't overbook under race | Large scale → distributed lock / dedicated matching service |
 | Zone list + Haversine | Google Maps / Leaflet | Brief says don't fight map APIs; free, hand-testable, no keys | Real routing/ETA becomes a requirement |
 | JWT (stateless) | Sessions in Redis | No extra infra for an MVP | Need instant revocation → server-side sessions |
-| Integer paisa | DECIMAL/float | Exact math, no drift, trivially hand-verifiable | Currency with >2 sub-decimals |
+| Whole-Taka integer | DECIMAL/float | Exact math, no drift, trivially hand-verifiable | The product needs fractional-Taka fares |
 
 ---
 

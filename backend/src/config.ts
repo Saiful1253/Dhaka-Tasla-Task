@@ -5,10 +5,10 @@ export const config = {
   jwtExpiresIn: "7d",
 
   fare: {
-    /** base fare in PAISA (৳50) */
-    baseFarePaisa: Number(process.env.BASE_FARE_PAISA ?? 5000),
-    /** per-km charge in PAISA (৳15/km) */
-    ratePerKmPaisa: Number(process.env.RATE_PER_KM_PAISA ?? 1500),
+    /** base fare in whole Taka (৳50) */
+    baseFareTaka: Number(process.env.BASE_FARE_TAKA ?? 50),
+    /** per-km charge in whole Taka (৳15/km) */
+    ratePerKmTaka: Number(process.env.RATE_PER_KM_TAKA ?? 15),
     /** pool discount percent applied when poolSize >= 2 (20%) */
     poolDiscountPct: Number(process.env.POOL_DISCOUNT_PCT ?? 20),
   },

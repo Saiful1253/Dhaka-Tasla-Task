@@ -68,7 +68,7 @@ REQUESTED → MATCHED/ACCEPTED → DRIVER_ARRIVED → STARTED → COMPLETED
 | Area | Constraint | Why it matters |
 |---|---|---|
 | **Geography** | No map APIs. Use a predefined list of Dhaka areas (Banani, Gulshan, Mohakhali, Dhanmondi, Mirpur, Uttara, Farmgate, Bashundhara…) or plain lat/long. Invent & **document a matching rule** (e.g., same pickup zone or compatible corridors) | Saves time; forces you to document a deterministic rule |
-| **Fare** | `passengerFare = baseFare + distanceCharge − poolDiscount`. Hand-testable. Explain **money storage** (integer paisa vs decimal) and why | Evaluator will compute Nusrat's & Rafiq's fare by hand |
+| **Fare** | `passengerFare = baseFare + distanceCharge − poolDiscount`. Hand-testable. Explain **money storage** (integer Taka vs decimal) and why | Evaluator will compute Nusrat's & Rafiq's fare by hand |
 | **Payment** | Cash or simulated **TeslaPay** wallet. No real gateway | Simplicity |
 | **Routing** | Not evaluated — *"not a Google Maps rebuild"* | Don't over-invest |
 | **Money/infra** | **Never pay** for anything | Free tiers only, or document the constraint + give reproducible Docker deploy |
@@ -289,7 +289,7 @@ Ranked by how likely they are to differentiate candidates:
 4. **No secrets in git, no giant initial commit, no direct-to-master feature work.** Process violations are *explicitly scored*.
 
 ### 🟠 Tier 2 — Judgement signals
-5. **Fare transparency.** Hand-calculable formula, documented money storage (integer paisa avoids float drift; state that), pool discount logic that splits fairly when 2 of 3 seats are taken.
+5. **Fare transparency.** Hand-calculable formula, documented money storage (integer Taka avoids float drift; state that), pool discount logic that splits fairly when 2 of 3 seats are taken.
 6. **Documented matching rule.** Nusrat (Banani→Mohakhali) and Rafiq (Banani→Gulshan 1) overlap but differ — your rule must deterministically say "yes, these share" and be applied consistently. Shirin's late arrival must hit the *capacity* path, not break it.
 7. **Justification discipline.** Every non-mandated choice needs *pick / alternative / why / when to switch*. This is graded in README **and** probed live.
 8. **Schema explainability.** Every table defensible: users, vehicles(capacity), ride_requests, pools, pool_members, ride_events/status history, fares, (optional) payments/ratings/audit.
@@ -323,7 +323,7 @@ A realistic order that produces a *legitimate* git history:
 feature/passenger-auth     → signup/login, JWT/session, roles
 feature/driver-flow        → online/offline, request feed, accept, lifecycle transitions
 feature/tesla-pooling      → capacity enforcement, pool creation/membership, atomic seat claim
-feature/fare-engine        → base + distance − poolDiscount, integer paisa
+feature/fare-engine        → base + distance − poolDiscount, integer Taka
 feature/ride-history       → ride_events audit trail, per-user history scoping
 test/pool-capacity-concurrency
 ```
@@ -350,10 +350,10 @@ areas(id, name, lat, lng)                       -- Banani, Gulshan, ...
 ride_requests(id, passenger_id→users, pickup_area_id, dest_area_id,
               seats_requested, status, created_at)
 pools(id, vehicle_id→vehicles, status, capacity_snapshot, started_at, completed_at)
-pool_members(id, pool_id→pools, request_id→ride_requests, seats, fare_paisa, status)
+pool_members(id, pool_id→pools, request_id→ride_requests, seats, fare_taka, status)
 rides/events(id, pool_id, from_status, to_status, actor_id, at)   -- audit trail
-fares(id, request_id, base_paisa, distance_paisa, discount_paisa,
-      total_paisa, currency)                   -- integer paisa, no floats
+fares(id, request_id, base_taka, distance_taka, discount_taka,
+      total_taka, currency)                   -- integer Taka, no floats
 payments(id, fare_id, method[cash|teslapay], status)
 ```
 **Concurrency guard (candidate answer):**

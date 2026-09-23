@@ -229,11 +229,11 @@ describe("3. Nusrat's and Rafiq's pooled fares calculate correctly", () => {
 
     // manual check: total = base + distance - discount
     for (const est of [est1.body, est2.body]) {
-      expect(est.basePaisa + est.distancePaisa - est.discountPaisa).toBe(
-        est.totalPaisa
+      expect(est.baseTaka + est.distanceTaka - est.discountTaka).toBe(
+        est.totalTaka
       );
       // no floats in money
-      expect(Number.isInteger(est.totalPaisa)).toBe(true);
+      expect(Number.isInteger(est.totalTaka)).toBe(true);
     }
 
     // pooled (poolSize=2) must be cheaper than solo for the same trip
@@ -243,8 +243,8 @@ describe("3. Nusrat's and Rafiq's pooled fares calculate correctly", () => {
     const pooled = await request(app)
       .get("/rides/estimate")
       .query({ pickup: bananiId, dest: mohakhaliId, poolSize: 2 });
-    expect(pooled.body.totalPaisa).toBeLessThan(solo.body.totalPaisa);
-    expect(pooled.body.discountPaisa).toBeGreaterThan(0);
+    expect(pooled.body.totalTaka).toBeLessThan(solo.body.totalTaka);
+    expect(pooled.body.discountTaka).toBeGreaterThan(0);
   });
 
   it("stored fares after pooling match computeFare exactly", async () => {
@@ -272,9 +272,9 @@ describe("3. Nusrat's and Rafiq's pooled fares calculate correctly", () => {
         dest: { lat: row.destArea.lat, lng: row.destArea.lng },
         poolSize: 2, // pool of 2
       });
-      expect(row.fare!.totalPaisa).toBe(expected.totalPaisa);
-      expect(row.fare!.discountPaisa).toBe(expected.discountPaisa);
-      expect(row.poolMembers[0].farePaisa).toBe(expected.totalPaisa);
+      expect(row.fare!.totalTaka).toBe(expected.totalTaka);
+      expect(row.fare!.discountTaka).toBe(expected.discountTaka);
+      expect(row.poolMembers[0].fareTaka).toBe(expected.totalTaka);
     }
   });
 });

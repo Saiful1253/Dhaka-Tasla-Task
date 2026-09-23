@@ -133,7 +133,7 @@ model PoolMember {
   poolId    Int      @map("pool_id")
   requestId Int      @unique @map("request_id")
   seats     Int      @default(1)
-  farePaisa Int      @map("fare_paisa") // individual fare for this passenger
+  fareTaka Int      @map("fare_taka") // individual fare for this passenger
   createdAt DateTime @default(now()) @map("created_at")
 
   pool    Pool        @relation(fields: [poolId], references: [id], onDelete: Cascade)
@@ -146,10 +146,10 @@ model PoolMember {
 model Fare {
   id            Int     @id @default(autoincrement())
   requestId     Int     @unique @map("request_id")
-  basePaisa     Int     @map("base_paisa")
-  distancePaisa Int     @map("distance_paisa")
-  discountPaisa Int     @default(0) @map("discount_paisa")
-  totalPaisa    Int     @map("total_paisa") // INTEGER paisa - no floats
+  baseTaka     Int     @map("base_taka")
+  distanceTaka Int     @map("distance_taka")
+  discountTaka Int     @default(0) @map("discount_taka")
+  totalTaka    Int     @map("total_taka") // whole Taka - no fractional values
   distanceKm    Float   @map("distance_km")
 
   request RideRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)

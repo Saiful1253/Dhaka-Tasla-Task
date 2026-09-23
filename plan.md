@@ -11,7 +11,7 @@
 **Scope cut (what we DO build)**
 - 3 actors: Passenger, Driver, Pool/Ride with the full state machine
 - Atomic seat-capacity enforcement (the #1 invariant)
-- Hand-testable fare formula (integer paisa)
+- Hand-testable fare formula (integer Taka)
 - Documented matching rule (zone/corridor based, no maps)
 - Docker compose up (app + postgres + migrations + seeds + healthcheck)
 - The 6 required tests, README with ERD + architecture + AI usage, git history, 6-min video
@@ -39,7 +39,7 @@
 
 **Assumptions to lock in NOW (write into README early)**
 1. Matching rule: *same pickup area OR pickup→destination corridor overlap* → eligible to pool (Nusrat + Rafiq match: both Banani pickup, both heading south/east corridor; Shirin matches but only if seats remain).
-2. Fare: `total = baseFare + distanceCharge − poolDiscount`, where `poolDiscount = poolDiscount% × (baseFare + distanceCharge)` if seats ≥ 2 occupied. Money stored as **integer paisa** (no float drift, exact hand-checking).
+2. Fare: `total = baseFare + distanceCharge − poolDiscount`, where `poolDiscount = poolDiscount% × (baseFare + distanceCharge)` if seats ≥ 2 occupied. Money stored as **integer Taka** (no float drift, exact hand-checking).
 3. Cancellation allowed only in `REQUESTED` or `MATCHED` (before `DRIVER_ARRIVED`).
 4. One active pool per vehicle at a time.
 
@@ -154,15 +154,15 @@ erDiagram
         int    pool_id FK
         int    request_id FK
         int    seats
-        int    fare_paisa   "individual fare"
+        int    fare_taka   "individual fare"
     }
     FARES {
         int    id PK
         int    request_id FK
-        int    base_paisa
-        int    distance_paisa
-        int    discount_paisa
-        int    total_paisa  "integer paisa, no floats"
+        int    base_taka
+        int    distance_taka
+        int    discount_taka
+        int    total_taka  "integer Taka, no floats"
     }
     RIDE_EVENTS {
         int    id PK
@@ -245,12 +245,12 @@ sequenceDiagram
 flowchart TB
     IN["Trip inputs\npickup · destination · seats · pool size"]
     DIST["Distance km\nHaversine(area_center → area_center)"]
-    BASE["baseFare (integer paisa)"]
+    BASE["baseFare (integer Taka)"]
     DC["distanceCharge = km × ratePerKm"]
     SUB["subtotal = baseFare + distanceCharge"]
     DISC["poolDiscount = subtotal × discount%\n(only if pool ≥ 2)"]
     TOT["passengerFare = subtotal − poolDiscount"]
-    OUT["Store INTEGER PAISA\nno float drift, exact by hand"]
+    OUT["Store INTEGER TAKA\nno float drift, exact by hand"]
 
     IN --> DIST --> DC --> SUB
     BASE --> SUB
@@ -303,8 +303,8 @@ areas(id, name, lat, lng)                       -- Banani, Gulshan, Mohakhali, .
 ride_requests(id, passenger_id, pickup_area_id, dest_area_id, seats_requested,
               status[REQUESTED|CANCELLED|...], created_at)
 pools(id, vehicle_id→vehicles, status, capacity, seats_taken, created_at, started_at, completed_at)
-pool_members(id, pool_id, request_id, seats, fare_paisa, status)
-fares(id, request_id, base_paisa, distance_paisa, discount_paisa, total_paisa)
+pool_members(id, pool_id, request_id, seats, fare_taka, status)
+fares(id, request_id, base_taka, distance_taka, discount_taka, total_taka)
 ride_events(id, pool_id, actor_id, from_status, to_status, note, at)   -- audit/history
 payments(id, fare_id, method[cash|teslapay], status)                    -- simulated
 ```
@@ -490,7 +490,7 @@ Script timing:
 
 ## Interview Prep Notes (write while building)
 - Why Postgres + row-lock conditional update for capacity? What breaks at 1M users?
-- Why integer paisa? What if currency had 3 decimals?
+- Why integer Taka? What if currency had 3 decimals?
 - Show the exact transition guard code.
 - What does `ride_events` buy you that `status` alone doesn't?
 - Which assumption was riskiest, and what would change it?

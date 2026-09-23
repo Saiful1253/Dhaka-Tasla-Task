@@ -84,7 +84,7 @@ CREATE TABLE "pool_members" (
     "pool_id" INTEGER NOT NULL,
     "request_id" INTEGER NOT NULL,
     "seats" INTEGER NOT NULL DEFAULT 1,
-    "fare_paisa" INTEGER NOT NULL,
+    "fare_taka" INTEGER NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "pool_members_pkey" PRIMARY KEY ("id")
@@ -94,10 +94,10 @@ CREATE TABLE "pool_members" (
 CREATE TABLE "fares" (
     "id" SERIAL NOT NULL,
     "request_id" INTEGER NOT NULL,
-    "base_paisa" INTEGER NOT NULL,
-    "distance_paisa" INTEGER NOT NULL,
-    "discount_paisa" INTEGER NOT NULL DEFAULT 0,
-    "total_paisa" INTEGER NOT NULL,
+    "base_taka" INTEGER NOT NULL,
+    "distance_taka" INTEGER NOT NULL,
+    "discount_taka" INTEGER NOT NULL DEFAULT 0,
+    "total_taka" INTEGER NOT NULL,
     "distance_km" DOUBLE PRECISION NOT NULL,
 
     CONSTRAINT "fares_pkey" PRIMARY KEY ("id")

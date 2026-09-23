@@ -71,15 +71,15 @@ async function recalcFares(poolId: number) {
       await prisma.fare.update({
         where: { id: m.request.fare.id },
         data: {
-          discountPaisa: fare.discountPaisa,
-          totalPaisa: fare.totalPaisa,
+          discountTaka: fare.discountTaka,
+          totalTaka: fare.totalTaka,
           distanceKm: fare.distanceKm,
         },
       });
     }
     await prisma.poolMember.update({
       where: { id: m.id },
-      data: { farePaisa: fare.totalPaisa },
+      data: { fareTaka: fare.totalTaka },
     });
   }
 }
@@ -142,7 +142,7 @@ driverRouter.get("/requests", async (req, res, next) => {
         dest: r.destArea.name,
         seats: r.seatsRequested,
         status: r.status,
-        estimatedFarePaisa: r.fare?.totalPaisa ?? null,
+        estimatedFareTaka: r.fare?.totalTaka ?? null,
         createdAt: r.createdAt,
       })),
     });
@@ -223,7 +223,7 @@ driverRouter.post("/pools", async (req, res, next) => {
       const p = await tx.pool.create({
         data: {
           vehicleId: vehicle.id,
-          status: "REQUESTED",
+          status: "MATCHED",
           capacity: vehicle.capacity,
           seatsTaken: 0,
         },
@@ -238,7 +238,7 @@ driverRouter.post("/pools", async (req, res, next) => {
             poolId: p.id,
             requestId: r.id,
             seats: r.seatsRequested,
-            farePaisa: 0,
+            fareTaka: 0,
           },
         });
         await tx.rideRequest.update({
@@ -252,7 +252,7 @@ driverRouter.post("/pools", async (req, res, next) => {
           poolId: p.id,
           actorId: req.user!.id,
           fromStatus: "NONE",
-          toStatus: "REQUESTED",
+          toStatus: "MATCHED",
           note: `Pool opened with ${requests.length} request(s)`,
         },
       });
@@ -261,7 +261,10 @@ driverRouter.post("/pools", async (req, res, next) => {
     });
 
     await recalcFares(pool.id);
-    res.status(201).json({ pool });
+    const updatedPool = await prisma.pool.findUnique({
+      where: { id: pool.id },
+    });
+    res.status(201).json({ pool: updatedPool });
   } catch (e) {
     next(e);
   }
@@ -415,7 +418,7 @@ membershipRouter.post("/pools/:id/join", async (req, res, next) => {
           poolId,
           requestId,
           seats: request.seatsRequested,
-          farePaisa: 0,
+          fareTaka: 0,
         },
       }),
       prisma.rideRequest.update({
@@ -481,7 +484,7 @@ membershipRouter.get("/pools/:id", async (req, res, next) => {
       seats: m.seats,
       status: m.request.status,
       isMe: m.request.passengerId === req.user!.id,
-      myFarePaisa: m.request.passengerId === req.user!.id ? m.farePaisa : null,
+      myFareTaka: m.request.passengerId === req.user!.id ? m.fareTaka : null,
       myFare: m.request.passengerId === req.user!.id ? m.request.fare : null,
     }));
 

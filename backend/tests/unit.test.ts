@@ -12,28 +12,28 @@ const gulshan1 = { lat: 23.7925, lng: 90.4078 };
 const uttara = { lat: 23.8759, lng: 90.3795 };
 
 describe("fare (pure, hand-testable)", () => {
-  it("total = base + distance - discount, always integer paisa", () => {
+  it("total = base + distance - discount, always whole Taka", () => {
     const f = computeFare({ pickup: banani, dest: mohakhali, poolSize: 1 });
-    expect(f.basePaisa + f.distancePaisa - f.discountPaisa).toBe(f.totalPaisa);
-    expect(Number.isInteger(f.totalPaisa)).toBe(true);
-    expect(f.discountPaisa).toBe(0); // solo => no discount
+    expect(f.baseTaka + f.distanceTaka - f.discountTaka).toBe(f.totalTaka);
+    expect(Number.isInteger(f.totalTaka)).toBe(true);
+    expect(f.discountTaka).toBe(0); // solo => no discount
   });
 
   it("pool discount applies only when poolSize >= 2", () => {
     const solo = computeFare({ pickup: banani, dest: mohakhali, poolSize: 1 });
     const duo = computeFare({ pickup: banani, dest: mohakhali, poolSize: 2 });
-    expect(duo.discountPaisa).toBeGreaterThan(0);
-    expect(duo.totalPaisa).toBeLessThan(solo.totalPaisa);
+    expect(duo.discountTaka).toBeGreaterThan(0);
+    expect(duo.totalTaka).toBeLessThan(solo.totalTaka);
     // hand-check: discount is exactly pct of subtotal
-    expect(duo.basePaisa + duo.distancePaisa - duo.discountPaisa).toBe(
-      duo.totalPaisa
+    expect(duo.baseTaka + duo.distanceTaka - duo.discountTaka).toBe(
+      duo.totalTaka
     );
   });
 
   it("farther trip costs more", () => {
     const short = computeFare({ pickup: banani, dest: gulshan1, poolSize: 1 });
     const long = computeFare({ pickup: banani, dest: uttara, poolSize: 1 });
-    expect(long.totalPaisa).toBeGreaterThan(short.totalPaisa);
+    expect(long.totalTaka).toBeGreaterThan(short.totalTaka);
   });
 });
 
