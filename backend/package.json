@@ -29,6 +29,8 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
+    "prisma": "^6.5.0",
+    "tsx": "^4.19.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
@@ -38,9 +40,7 @@
     "@types/morgan": "^1.9.9",
     "@types/node": "^22.13.10",
     "@types/supertest": "^6.0.2",
-    "prisma": "^6.5.0",
     "supertest": "^7.0.0",
-    "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"
   },
