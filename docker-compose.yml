@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: dhaka-tesla-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dhaka_tesla_pool
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dhaka_tesla_pool"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+    container_name: dhaka-tesla-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/dhaka_tesla_pool?schema=public
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me-before-production}
+      BASE_FARE_PAISA: ${BASE_FARE_PAISA:-5000}
+      RATE_PER_KM_PAISA: ${RATE_PER_KM_PAISA:-1500}
+      POOL_DISCOUNT_PCT: ${POOL_DISCOUNT_PCT:-20}
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  pgdata:
