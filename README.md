@@ -430,13 +430,3 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 - PostGIS geospatial matching, read replicas, caching, queue-based matching at scale (see bonus scaling section).
 
 ---
-
-## 🤖 AI Usage
-
-_(Tools used, one accepted suggestion, one rejected/changed suggestion — filled before submission.)_
-
----
-
-## 🎬 Demo Video
-
-_(6-minute Loom link — filled before submission.)_
