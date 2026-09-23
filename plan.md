@@ -24,11 +24,11 @@
 - ⏸ Scaling bonus → **only** if everything else is done (it's a bonus, README section is enough)
 
 **Non-negotiables (check every 2 hours)**
-- [ ] No secrets in git (`.env.example` only)
-- [ ] Every commit: `type(scope): short description`
-- [ ] Feature branches only — never commit features straight to `master`
-- [ ] Cast stays consistent: Jashim / Bullet / Nusrat / Rafiq / Shirin
-- [ ] Each phase ends with **working, committed** code
+- [x] No secrets in git (`.env.example` only)
+- [x] Every commit: `type(scope): short description`
+- [x] Feature branches only — never commit features straight to `master`
+- [x] Cast stays consistent: Jashim / Bullet / Nusrat / Rafiq / Shirin
+- [x] Each phase ends with **working, committed** code
 
 **DECIDED: No map — Area List only (Option A)**
 - UI: pickup/destination = **dropdown of Dhaka areas** (no Leaflet/Google Maps/any map API)
@@ -315,34 +315,34 @@ payments(id, fare_id, method[cash|teslapay], status)                    -- simul
 **✅ End of hour:** diagrams + schema + assumptions exist on disk and in git.
 
 ## ⏱ 10:00 – 11:00 · Hour 2: Scaffold + Docker skeleton
-- [ ] Monorepo: `/frontend` (Next.js), `/backend` (Express+TS), `/db` (optional)
-- [ ] `backend`: Express + Zod + Prisma init + error-handling middleware + request logging (pino/morgan)
-- [ ] `.env.example` (DB_URL, JWT_SECRET, PORT…) — **never real values**
-- [ ] `docker-compose.yml` v1: `postgres` (with volume + healthcheck) + `api` (dev), `db:migrate` + `seed` on start
-- [ ] Verify: `docker compose up` → healthy
+- [x] Monorepo: `/frontend` (Next.js), `/backend` (Express+TS), `/db` (optional)
+- [x] `backend`: Express + Zod + Prisma init + error-handling middleware + request logging (pino/morgan)
+- [x] `.env.example` (DB_URL, JWT_SECRET, PORT…) — **never real values**
+- [x] `docker-compose.yml` v1: `postgres` (with volume + healthcheck) + `api` (dev), `db:migrate` + `seed` on start
+- [ ] Verify: `docker compose up` → healthy  *(BLOCKED: WSL not installed — needs admin)*
 - Commits: `chore(scaffold)`, `build(docker): add compose with postgres and healthcheck`
 - **Branch:** do this on `master` (project setup) — feature work starts next hour
 
 **✅ End of hour:** app boots in Docker, DB reachable.
 
 ## ⏱ 11:00 – 13:00 · Hours 3–4: `feature/passenger-auth`
-- [ ] `POST /auth/signup`, `POST /auth/login` (roles: passenger | driver)
-- [ ] JWT middleware + `requireRole('passenger')` guards
-- [ ] Zod validation, bcrypt hashing, uniform error envelope `{error: {code, message}}`
-- [ ] Areas endpoint: `GET /areas` (seed Banani, Gulshan, Mohakhali, Dhanmondi, Mirpur, Uttara, Farmgate, Bashundhara)
-- [ ] Fare estimate: `GET /rides/estimate?pickup=&dest=&seats=` → returns breakdown (base/distance/discount/total)
-- [ ] Unit tests: fare formula (Nusrat & Rafiq hand-calculated), auth failures
+- [x] `POST /auth/signup`, `POST /auth/login` (roles: passenger | driver)
+- [x] JWT middleware + `requireRole('passenger')` guards
+- [x] Zod validation, bcrypt hashing, uniform error envelope `{error: {code, message}}`
+- [x] Areas endpoint: `GET /areas` (seed Banani, Gulshan, Mohakhali, Dhanmondi, Mirpur, Uttara, Farmgate, Bashundhara)
+- [x] Fare estimate: `GET /rides/estimate?pickup=&dest=&seats=` → returns breakdown (base/distance/discount/total)
+- [x] Unit tests: fare formula (Nusrat & Rafiq hand-calculated), auth failures
 - Commits: `feat(auth): add signup/login with JWT`, `feat(areas): seed Dhaka areas`, `feat(fare): implement estimate endpoint`, `test(fare): verify Nusrat and Rafiq pooled fares`
-- [ ] Merge → `master` when green
+- [x] Merge → `master` when green
 
 **✅ End of hour:** can sign up as Nusrat, get a hand-verifiable fare estimate.
 
 ## ⏱ 13:00 – 14:00 · Lunch + buffer
 
 ## ⏱ 14:00 – 16:30 · Hours 5–6.5: `feature/tesla-pooling` ⭐ (the core)
-- [ ] `POST /rides` → create `ride_request` (status `REQUESTED`)
-- [ ] **Matching rule implementation** (documented fn): find *online* vehicles with compatible corridor + free seats
-- [ ] `POST /pools/:id/join` → **ATOMIC seat claim**:
+- [x] `POST /rides` → create `ride_request` (status `REQUESTED`)
+- [x] **Matching rule implementation** (documented fn): find *online* vehicles with compatible corridor + free seats
+- [x] `POST /pools/:id/join` → **ATOMIC seat claim**:
   ```sql
   BEGIN;
   UPDATE pools SET seats_taken = seats_taken + $n
@@ -352,39 +352,39 @@ payments(id, fare_id, method[cash|teslapay], status)                    -- simul
   COMMIT;
   ```
   (Prisma: `$transaction` + conditional update, or raw SQL — explain in README)
-- [ ] Driver: `GET /driver/requests` (relevant only), `POST /pools` (open pool), `POST /pools/:id/accept`
-- [ ] Lifecycle: `POST /pools/:id/arrived | start | complete` with **server-side transition guard** (invalid ⇒ 409/422)
-- [ ] Authorization: passengers only see **their own** fare/status/membership (`pool_members` scoping middleware)
-- [ ] Cancellation: only `REQUESTED`/`MATCHED`; releases seats atomically
-- [ ] `ride_events` written on every transition (history/audit)
+- [x] Driver: `GET /driver/requests` (relevant only), `POST /pools` (open pool), `POST /pools/:id/accept`
+- [x] Lifecycle: `POST /pools/:id/arrived | start | complete` with **server-side transition guard** (invalid ⇒ 409/422)
+- [x] Authorization: passengers only see **their own** fare/status/membership (`pool_members` scoping middleware)
+- [x] Cancellation: only `REQUESTED`/`MATCHED`; releases seats atomically
+- [x] `ride_events` written on every transition (history/audit)
 - Commits: `feat(pool): enforce Bullet's seat capacity`, `feat(pool): implement corridor matching rule`, `feat(ride): add lifecycle transitions with guard`, `fix(pool): release seats on cancellation`
 
 **✅ End of hour:** full backend lifecycle works via API; capacity cannot be exceeded.
 
 ## ⏱ 16:30 – 17:30 · Hour 7: `test/pool-concurrency` + seed
-- [ ] The 6 required tests:
+- [x] The 6 required tests:
   1. capacity never exceeded
   2. invalid transitions rejected
   3. Nusrat + Rafiq pooled fares correct
   4. user cannot modify another user's ride
   5. cancellation rules hold
   6. **two concurrent seat claims → exactly one wins** (parallel Supertest `Promise.all` against Dockerized Postgres)
-- [ ] Seed script with the **story cast**: Jashim + Bullet (3 seats), Nusrat, Rafiq, Shirin (+ demo credentials)
+- [x] Seed script with the **story cast**: Jashim + Bullet (3 seats), Nusrat, Rafiq, Shirin (+ demo credentials)
 - Commits: `test(pool): add concurrent seat claim test`, `chore(seed): add story cast demo data`
 
 **✅ End of hour:** `npm test` green in Docker.
 
 ## ⏱ 17:30 – 18:30 · Hour 8: API docs + Day 1 wrap
-- [ ] README: API overview table (method, path, auth, description)
-- [ ] Commit all; merge to `master`
-- [ ] Day-1 review: re-run `docker compose up --build` from scratch
+- [x] README: API overview table (method, path, auth, description)
+- [x] Commit all; merge to `master`
+- [ ] Day-1 review: re-run `docker compose up --build` from scratch *(BLOCKED: WSL)*
 
 **🎯 Day 1 exit criteria**
 - [x] `docker compose up` → DB + API + migrations + seeds healthy
 - [x] All ride/pool/fare/auth endpoints working with guards
 - [x] 6 tests passing (incl. concurrency)
 - [x] ERD + architecture in README, assumptions documented
-- [ ] Feature branches merged into `master` with clean history
+- [x] Feature branches merged into `master` with clean history
 
 ---
 

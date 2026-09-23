@@ -37,25 +37,26 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 
 **Problem:** Nusrat wants Banani → Mohakhali, Rafiq wants Banani → Gulshan 1, and 30 seconds later Shirin wants the last seat. In about a second the system must decide whether these strangers can share a seat, at what fare, without ever exceeding Bullet's 3 seats — even when two requests arrive at the exact same instant.
 
-> 🚧 **Status:** Day 1 — Blueprint complete. Backend in progress.
+> 🚧 **Status:** Day 1 — backend (auth, rides, pooling, tests, Docker) complete. Frontend → Day 2.
 
 ---
 
 ## 🧩 Features Implemented
 
-- [ ] Passenger sign-up / sign-in (JWT)
-- [ ] Driver sign-up / sign-in (JWT) + online/offline toggle
-- [ ] Ride request: pickup area, destination area, seats
-- [ ] Fare estimate (hand-testable breakdown)
-- [ ] Ride lifecycle with server-side state guard
-- [ ] Pool creation + **atomic seat-capacity enforcement**
-- [ ] Corridor/zone matching rule
-- [ ] Per-passenger fare & status isolation
-- [ ] Ride history + audit trail (`ride_events`)
-- [ ] Cancellation while in a valid state
-- [ ] Seed data with the story cast
-- [ ] Docker Compose setup
-- [ ] Tests (capacity, transitions, fare, authz, cancellation, concurrency)
+- [x] Passenger sign-up / sign-in (JWT)
+- [x] Driver sign-up / sign-in (JWT) + online/offline toggle
+- [x] Ride request: pickup area, destination area, seats
+- [x] Fare estimate (hand-testable breakdown)
+- [x] Ride lifecycle with server-side state guard
+- [x] Pool creation + **atomic seat-capacity enforcement**
+- [x] Corridor/zone matching rule
+- [x] Per-passenger fare & status isolation
+- [x] Ride history + audit trail (`ride_events`)
+- [x] Cancellation while in a valid state
+- [x] Seed data with the story cast
+- [x] Docker Compose setup
+- [x] Tests (capacity, transitions, fare, authz, cancellation, concurrency)
+- [ ] Frontend (Next.js) — Day 2
 
 ---
 
@@ -300,12 +301,22 @@ PORT=4000
 ## 🚀 Local Setup
 
 ```bash
-# 1. install
-# 2. migrate + seed
-# 3. run backend & frontend
+# 1. install dependencies
+cd backend && npm install
+npx prisma generate
+
+# 2. start Postgres (Docker) 
+docker compose up -d db
+
+# 3. migrate + seed the story cast
+npx prisma migrate deploy
+npm run seed
+
+# 4. run the API (dev)
+npm run dev          # → http://localhost:4000/health
 ```
 
-_(Commands to be filled in as the build progresses — Day 1, Hour 2.)_
+Frontend (Day 2): `cd frontend && npm install && npm run dev`.
 
 ---
 
@@ -315,35 +326,82 @@ _(Commands to be filled in as the build progresses — Day 1, Hour 2.)_
 docker compose up --build
 ```
 
-_(Coming in Day 1, Hour 2.)_
+Brings up:
+- **db** — `postgres:17-alpine`, volume `pgdata`, healthcheck `pg_isready`
+- **api** — builds `backend/`, waits for db healthy, runs `prisma migrate deploy` + `seed`, then starts; healthcheck `GET /health`
+
+`.env` is never committed — copy `.env.example` and set `JWT_SECRET`.
 
 ---
 
 ## 🧪 Running Tests
 
 ```bash
-npm test
+cd backend
+npm test             # runs vitest against DATABASE_URL (needs Postgres up)
 ```
 
 Tests cover exactly what is risky:
-1. Bullet's capacity can never be exceeded
-2. Invalid state transitions are rejected
-3. Nusrat's and Rafiq's pooled fares calculate correctly
-4. Users cannot modify another user's ride
-5. Cancellation rules hold
-6. Two concurrent requests cannot corrupt pool capacity
+1. Bullet's capacity can never be exceeded (+ DB CHECK as second net)
+2. Invalid state transitions are rejected (409 INVALID_TRANSITION)
+3. Nusrat's and Rafiq's pooled fares calculate correctly (integer paisa)
+4. Users cannot modify another user's ride (403)
+5. Cancellation rules hold (releases seats; blocked once STARTED)
+6. Two concurrent requests cannot corrupt pool capacity (`Promise.all` race → one 201, one 409)
+
+Pure-logic tests (fare, matching, state machine) run without a DB.
 
 ---
 
 ## 🔑 Demo Credentials
 
-_(Filled by the seed script — Day 1, Hour 7.)_
+Seeded by `npm run seed` (password for all: `tesla123`):
+
+| Role | Email | Notes |
+|---|---|---|
+| Driver | `jashim@dhakatesla.bd` | owns **Bullet**, capacity **3**, online |
+| Passenger | `nusrat@dhakatesla.bd` | Banani → Mohakhali |
+| Passenger | `rafiq@dhakatesla.bd` | Banani → Gulshan 1 |
+| Passenger | `shirin@dhakatesla.bd` | arrives last, fights for the seat |
 
 ---
 
 ## 🔌 API Overview
 
-_(Filled as endpoints land — Day 1, Hour 8.)_
+Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Errors: `{ "error": { "code", "message" } }`
+
+### Auth
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/auth/signup` | — | `{name,email,password,role}` → `{user,token}` |
+| POST | `/auth/login` | — | `{email,password}` → `{user,token}` |
+
+### Areas & fare
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/areas` | any | predefined Dhaka zone list (id, name, lat, lng) |
+| GET | `/rides/estimate?pickup=&dest=&seats=&poolSize=` | any | hand-testable fare breakdown (paisa) |
+
+### Rides (passenger)
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/rides` | passenger | request a ride → `REQUESTED` |
+| GET | `/rides` | passenger | my history only |
+| GET | `/rides/:id` | passenger (owner) | own ride + own fare (403 for others) |
+| GET | `/rides/:id/matches` | passenger (owner) | compatible requests via matching rule |
+| DELETE | `/rides/:id` | passenger (owner) | cancel while `REQUESTED`/`MATCHED`, frees seats |
+
+### Driver & pool
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/driver/requests` | driver | open requests + vehicle (Bullet, seats) |
+| POST | `/driver/online` | driver | toggle online/offline |
+| POST | `/driver/pools` | driver | open pool `{requestIds}` — atomic capacity check |
+| GET | `/driver/pools` | driver | my pools, passengers, seats, events |
+| POST | `/driver/pools/:id/arrived\|start\|complete\|cancel` | driver (owner) | guarded lifecycle → 409 on illegal move |
+| POST | `/pools/:id/join` | passenger (owner) | join with own request — atomic seat claim |
+| GET | `/pools/:id` | driver or member | roster + own fare only (`myFarePaisa`) |
+| GET | `/health` | — | liveness (Docker healthcheck) |
 
 ---
 
