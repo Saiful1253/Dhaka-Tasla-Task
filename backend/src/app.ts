@@ -23,8 +23,6 @@ export function createApp() {
   app.use("/rides", rideRouter);
   app.use("/driver", driverRouter);
   app.use(membershipRouter);
-  app.use("/driver", driverRouter);
-  app.use(membershipRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
