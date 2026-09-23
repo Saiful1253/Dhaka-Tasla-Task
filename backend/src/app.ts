@@ -2,6 +2,7 @@ import express from "express";
 import morgan from "morgan";
 import { authRouter } from "./routes/auth";
 import { rideRouter, areaRouter } from "./routes/rides";
+import { driverRouter, membershipRouter } from "./routes/pools";
 import { errorHandler, notFoundHandler } from "./middleware/error";
 
 export function createApp() {
@@ -20,6 +21,10 @@ export function createApp() {
   app.use("/auth", authRouter);
   app.use(areaRouter);
   app.use("/rides", rideRouter);
+  app.use("/driver", driverRouter);
+  app.use(membershipRouter);
+  app.use("/driver", driverRouter);
+  app.use(membershipRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
