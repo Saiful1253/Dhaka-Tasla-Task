@@ -292,9 +292,9 @@ flowchart TB
 # DAY 1 — Backend + Database + Docker (the hard half)
 
 ## ⏱ 09:00 – 10:00 · Hour 1: Blueprint on paper
-- [ ] Write `README.md` skeleton: Summary, Assumptions (the 4 above), matching rule, fare formula
-- [ ] Draw **ERD** (Mermaid) and **architecture diagram** (Browser → Next.js → Express → Postgres) *before coding*
-- [ ] Finalize schema:
+- [x] Write `README.md` skeleton: Summary, Assumptions (the 4 above), matching rule, fare formula
+- [x] Draw **ERD** (Mermaid) and **architecture diagram** (Browser → Next.js/Express → Postgres) *before coding*
+- [x] Finalize schema:
 
 ```sql
 users(id, name, email, password_hash, role[passenger|driver], created_at)
@@ -308,9 +308,9 @@ fares(id, request_id, base_paisa, distance_paisa, discount_paisa, total_paisa)
 ride_events(id, pool_id, actor_id, from_status, to_status, note, at)   -- audit/history
 payments(id, fare_id, method[cash|teslapay], status)                    -- simulated
 ```
-- [ ] Define allowed transitions map (single source of truth):
+- [x] Define allowed transitions map (single source of truth):
   `REQUESTED → MATCHED → DRIVER_ARRIVED → STARTED → COMPLETED`, `REQUESTED|MATCHED → CANCELLED`
-- [ ] `git init`, create `master`, first `docs(readme): add PRD analysis and blueprint` commit
+- [x] `git init`, create `master`, first `docs(readme): add PRD analysis and blueprint` commit
 
 **✅ End of hour:** diagrams + schema + assumptions exist on disk and in git.
 
