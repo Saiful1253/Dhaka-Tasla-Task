@@ -37,6 +37,15 @@ export function errorHandler(
         error: { code: "NOT_FOUND", message: "Resource not found" },
       });
     }
+    if (err.code === "P2028") {
+      res.set("Retry-After", "2");
+      return res.status(503).json({
+        error: {
+          code: "TRANSACTION_TIMEOUT",
+          message: "The database is busy. The action was not saved; please retry.",
+        },
+      });
+    }
     if (err.code === "P2034") {
       return res.status(409).json({
         error: {

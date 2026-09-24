@@ -79,6 +79,8 @@ function getActionErrorTitle(error: unknown): string {
       return "This vehicle already has an active pool";
     case "NETWORK_ERROR":
       return "Action result needs verification";
+    case "TRANSACTION_TIMEOUT":
+      return "Dispatch is busy";
     case "INVALID_TRANSITION":
     case "POOL_CLOSED":
     case "REQUEST_UNAVAILABLE":

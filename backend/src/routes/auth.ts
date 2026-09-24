@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { prisma } from "../lib/prisma";
+import { prisma, interactiveTransactionOptions } from "../lib/prisma";
 import { errors } from "../lib/errors";
 import { signToken } from "../middleware/auth";
 
@@ -54,7 +54,7 @@ authRouter.post("/signup", async (req, res, next) => {
       }
 
       return created;
-    });
+    }, interactiveTransactionOptions);
 
     res.status(201).json({
       user: { id: user.id, name: user.name, email: user.email, role: user.role },

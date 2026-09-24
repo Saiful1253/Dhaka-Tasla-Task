@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { createHmac } from "node:crypto";
 import { z } from "zod";
-import { prisma } from "../lib/prisma";
+import { prisma, interactiveTransactionOptions } from "../lib/prisma";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { config } from "../config";
 import { errors } from "../lib/errors";
@@ -287,7 +287,7 @@ rideRouter.delete("/:id", async (req, res, next) => {
           },
         });
       }
-    });
+    }, interactiveTransactionOptions);
 
     res.json({ ok: true, id, status: "CANCELLED" });
   } catch (e) {

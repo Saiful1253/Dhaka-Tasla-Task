@@ -6,7 +6,7 @@ import {
 } from "express";
 import type { PoolStatus, Prisma, RideStatus } from "@prisma/client";
 import { z } from "zod";
-import { prisma } from "../lib/prisma";
+import { prisma, interactiveTransactionOptions } from "../lib/prisma";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { errors } from "../lib/errors";
 import { computeFare } from "../lib/fare";
@@ -339,7 +339,7 @@ driverRouter.post("/pools", async (req, res, next) => {
 
       await recalcFaresTx(tx, p.id);
       return p;
-    });
+    }, interactiveTransactionOptions);
 
     const updatedPool = await prisma.pool.findUnique({
       where: { id: pool.id },
@@ -466,7 +466,7 @@ driverRouter.post("/pools/:id/requests", async (req, res, next) => {
       });
       await recalcFaresTx(tx, poolId);
       return poolId;
-    });
+    }, interactiveTransactionOptions);
 
     const updatedPool = await prisma.pool.findUnique({
       where: { id: updatedPoolId },
@@ -522,7 +522,7 @@ async function transition(
         },
       });
       return { id: pool.id, status: to };
-    });
+    }, interactiveTransactionOptions);
 
     res.json({ poolId: result.id, status: result.status });
   } catch (e) {

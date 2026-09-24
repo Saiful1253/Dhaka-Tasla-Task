@@ -1,4 +1,8 @@
+import { Prisma } from "@prisma/client";
+import express from "express";
+import request from "supertest";
 import { describe, it, expect } from "vitest";
+import { errorHandler } from "../src/middleware/error";
 import { computeFare } from "../src/lib/fare";
 import {
   assertPoolTransition,
@@ -100,5 +104,27 @@ describe("matching rule", () => {
         { pickup: uttara, dest: gulshan1 }
       )
     ).toBe(false);
+  });
+});
+
+describe("database error envelope", () => {
+  it("returns a retryable response when a transaction times out", async () => {
+    const app = express();
+    app.get("/dispatch", () => {
+      throw new Prisma.PrismaClientKnownRequestError("Transaction timed out", {
+        code: "P2028",
+        clientVersion: "6.19.3",
+      });
+    });
+    app.use(errorHandler);
+
+    const response = await request(app).get("/dispatch");
+
+    expect(response.status).toBe(503);
+    expect(response.headers["retry-after"]).toBe("2");
+    expect(response.body.error).toEqual({
+      code: "TRANSACTION_TIMEOUT",
+      message: "The database is busy. The action was not saved; please retry.",
+    });
   });
 });
