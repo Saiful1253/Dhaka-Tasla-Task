@@ -6,6 +6,10 @@ const backendUrl = (process.env.BACKEND_API_URL ?? "http://localhost:4000").repl
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  output: "export",
+  images: {
+    unoptimized: true,
+  },
   async rewrites() {
     return [
       {
