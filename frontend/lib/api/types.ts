@@ -222,40 +222,6 @@ export interface PassengerPoolDetails {
   events: RawDriverPool["events"];
 }
 
-export type OpenPoolCapacityState = "available" | "last-seat" | "full";
-
-/** Privacy-safe open-pool discovery data for a passenger's own request. */
-export interface OpenPool {
-  id: number;
-  status: PoolStatus;
-  capacity: number;
-  seatsTaken: number;
-  remainingSeats: number;
-  capacityState: OpenPoolCapacityState;
-  vehicle: {
-    name: string;
-    plate: string | null;
-  };
-  route: {
-    pickup: string;
-    destination: string;
-  } | null;
-  memberCount: number;
-  compatibleRequestIds: number[];
-  joinableRequestIds: number[];
-}
-
-export interface OpenPoolsResponse {
-  pools: OpenPool[];
-  refreshedAt: string;
-}
-
-export interface JoinPoolResponse {
-  ok: true;
-  poolId: number;
-  seatsTaken: number;
-}
-
 export type ApiErrorEnvelope = {
   error: {
     code: string;

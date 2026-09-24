@@ -150,6 +150,12 @@ describe("1. Bullet's capacity can never be exceeded", () => {
 
     const pool = await prisma.pool.findUnique({ where: { id: poolId } });
     expect(pool!.seatsTaken).toBeLessThanOrEqual(pool!.capacity);
+    const waiting = await prisma.rideRequest.findUnique({
+      where: { id: c.id },
+      include: { poolMembers: true },
+    });
+    expect(waiting!.status).toBe("REQUESTED");
+    expect(waiting!.poolMembers).toHaveLength(0);
   });
 
   it("DB CHECK constraint is the second net", async () => {
@@ -412,6 +418,8 @@ describe("6. Two concurrent manual assignments can't corrupt pool capacity", () 
 
     const statuses = [res1.status, res2.status].sort();
     expect(statuses).toEqual([201, 409]); // exactly one wins
+    const rejected = [res1, res2].find((response) => response.status === 409);
+    expect(rejected?.body.error.code).toBe("NO_SEATS");
 
     const pool = await prisma.pool.findUnique({ where: { id: poolId } });
     expect(pool!.seatsTaken).toBe(3); // never 4
@@ -421,7 +429,11 @@ describe("6. Two concurrent manual assignments can't corrupt pool capacity", () 
     const matched = await prisma.rideRequest.count({
       where: { id: { in: [s1.id, s2.id] }, status: "MATCHED" },
     });
+    const stillWaiting = await prisma.rideRequest.count({
+      where: { id: { in: [s1.id, s2.id] }, status: "REQUESTED" },
+    });
     expect(matched).toBe(1);
+    expect(stillWaiting).toBe(1);
   });
 
   it("faraway trips are rejected by the matching rule", async () => {
@@ -539,7 +551,7 @@ describe("7. Day-2 signup, manual assignment, and last-seat contracts", () => {
     expect(rides.status).toBe(403);
   });
 
-  it("supports passenger open-pool discovery and atomic last-seat join/rejection", async () => {
+  it("uses driver-only manual assignment, protects the last seat, and exposes no passenger pool routes", async () => {
     const n = await makeRide(nusratToken, bananiId, mohakhaliId, 1);
     const r = await makeRide(rafiqToken, bananiId, gulshan1Id, 1);
     const opened = await request(app)
@@ -549,41 +561,21 @@ describe("7. Day-2 signup, manual assignment, and last-seat contracts", () => {
     expect(opened.status).toBe(201);
     const poolId = opened.body.pool.id;
 
-    // The last-seat path uses the story's divergent Banani → Dhanmondi route;
-    // same pickup keeps it compatible while Bullet's final seat enforces the cap.
+    // Same pickup keeps this divergent destination compatible while Bullet's
+    // final seat enforces the cap through the driver assignment endpoint.
     const finalSeat = await makeRide(shirinToken, bananiId, dhanmondiId, 1);
-    const openForShirin = await request(app)
-      .get("/pools/open")
-      .set("Authorization", `Bearer ${shirinToken}`);
-    expect(openForShirin.status).toBe(200);
-    const openPool = openForShirin.body.pools.find(
-      (pool: { id: number }) => pool.id === poolId,
-    );
-    expect(openPool.capacityState).toBe("last-seat");
-    expect(openPool.joinableRequestIds).toContain(finalSeat.id);
-    expect(openPool).not.toHaveProperty("fareTaka");
-
     const accepted = await request(app)
-      .post(`/pools/${poolId}/join`)
-      .set("Authorization", `Bearer ${shirinToken}`)
-      .send({ requestId: finalSeat.id });
+      .post(`/driver/pools/${poolId}/requests`)
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [finalSeat.id] });
     expect(accepted.status).toBe(201);
-    expect(accepted.body.seatsTaken).toBe(3);
+    expect(accepted.body.pool.seatsTaken).toBe(3);
 
     const rejectedRequest = await makeRide(nusratToken, bananiId, gulshan1Id, 1);
-    const openForNusrat = await request(app)
-      .get("/pools/open")
-      .set("Authorization", `Bearer ${nusratToken}`);
-    const fullPool = openForNusrat.body.pools.find(
-      (pool: { id: number }) => pool.id === poolId,
-    );
-    expect(fullPool.capacityState).toBe("full");
-    expect(fullPool.joinableRequestIds).not.toContain(rejectedRequest.id);
-
     const rejected = await request(app)
-      .post(`/pools/${poolId}/join`)
-      .set("Authorization", `Bearer ${nusratToken}`)
-      .send({ requestId: rejectedRequest.id });
+      .post(`/driver/pools/${poolId}/requests`)
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [rejectedRequest.id] });
     expect(rejected.status).toBe(409);
     expect(rejected.body.error.code).toBe("NO_SEATS");
 
@@ -593,6 +585,19 @@ describe("7. Day-2 signup, manual assignment, and last-seat contracts", () => {
     expect(unchanged!.status).toBe("REQUESTED");
     const pool = await prisma.pool.findUnique({ where: { id: poolId } });
     expect(pool!.seatsTaken).toBe(3);
+
+    const openPools = await request(app)
+      .get("/pools/open")
+      .set("Authorization", `Bearer ${nusratToken}`);
+    expect(openPools.status).toBe(404);
+    expect(openPools.body.error.code).toBe("NOT_FOUND");
+
+    const passengerJoin = await request(app)
+      .post(`/pools/${poolId}/join`)
+      .set("Authorization", `Bearer ${nusratToken}`)
+      .send({ requestId: rejectedRequest.id });
+    expect(passengerJoin.status).toBe(404);
+    expect(passengerJoin.body.error.code).toBe("NOT_FOUND");
 
     const details = await request(app)
       .get(`/pools/${poolId}`)
@@ -605,7 +610,11 @@ describe("7. Day-2 signup, manual assignment, and last-seat contracts", () => {
       (member: { isMe: boolean }) => !member.isMe,
     );
     expect(own.myFareTaka).not.toBeNull();
-    expect(others.every((member: { myFareTaka: null }) => member.myFareTaka === null)).toBe(true);
+    expect(
+      others.every(
+        (member: { myFareTaka: null }) => member.myFareTaka === null,
+      ),
+    ).toBe(true);
   });
 
   it("adds compatible requests to the active pool and exposes pool membership in history", async () => {

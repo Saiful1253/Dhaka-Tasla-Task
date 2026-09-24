@@ -84,7 +84,7 @@ export function ManualAssignmentPanel({ ride }: ManualAssignmentPanelProps) {
                 <MapPin aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-ink/40" />
                 <p className="text-sm font-semibold leading-5 text-ink/75">
                   {ride.pickupArea.name}
-                  <span className="mx-2 text-ink/30">→</span>
+                  <span className="mx-2 text-ink/30">ΓåÆ</span>
                   {ride.destArea.name}
                 </p>
               </div>
@@ -170,7 +170,7 @@ export function ManualAssignmentPanel({ ride }: ManualAssignmentPanelProps) {
           <p>
             {ride && isTerminalRide(ride.status)
               ? "This assignment is closed. Its final status remains visible in your private history."
-              : "Wait for a driver to select your compatible request. Passenger self-join routes are intentionally disabled, and the API confirms every assignment."}
+              : "Wait for the assigned driver to select compatible passengers and confirm every seat. This passenger board never books a request."}
           </p>
         </div>
       </div>
