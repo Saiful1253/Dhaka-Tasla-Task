@@ -553,7 +553,6 @@ flowchart LR
 - **Live updates:** publish committed lifecycle events to SSE/WebSockets while retaining polling as a reconnect/fallback path.
 - **Reliability:** add rate limits, request tracing, idempotent consumers, dead-letter handling, backups, and database connection-pool tuning.
 - **Deployment:** run multiple stateless API replicas behind a load balancer, use managed PostgreSQL with point-in-time recovery, and deploy the frontend independently.
-
 ---
 
 ## 🤖 AI Usage
