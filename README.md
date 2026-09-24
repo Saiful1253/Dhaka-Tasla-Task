@@ -33,11 +33,11 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 
 ## 📝 Summary
 
-**Dhaka Tesla Pool** is a full-stack ride-pooling MVP. One driver (Jashim) with one 3-seat vehicle (Bullet) can carry multiple passengers whose trips overlap. Passengers see only *their own* fare and status; the driver sees everyone assigned to the ride. Every state change is guarded server-side and recorded in an audit trail.
+**Dhaka Tesla Pool** is a full-stack ride-pooling MVP. One driver (Jashim) with one 3-seat vehicle (Bullet) can carry multiple passengers whose trips overlap. Each passenger sees only *their own* fare and request status; the shared roster exposes routes and the common pool lifecycle, but never another passenger's fare. Pool transitions and pooled cancellations are guarded server-side and recorded in an audit trail.
 
-**Problem:** Nusrat wants Banani → Mohakhali, Rafiq wants Banani → Gulshan 1, and 30 seconds later Shirin wants the last seat. In about a second the system must decide whether these strangers can share a seat, at what fare, without ever exceeding Bullet's 3 seats — even when two requests arrive at the exact same instant.
+**Problem:** Nusrat wants Banani → Mohakhali, Rafiq wants Banani → Gulshan 1, and 30 seconds later Shirin wants the last seat. Jashim opens the initial pool, compatible passengers can join it, and the server calculates each fare while preventing Bullet's 3 seats from being exceeded — even when two last-seat claims arrive at the exact same instant.
 
-> 🚧 **Status:** Day 1 — backend (auth, rides, pooling, tests, Docker) complete. Frontend → Day 2.
+> 🚧 **Status:** Day 2 — passenger and driver consoles, manual driver assignment, passenger open-pool joining, signup provisioning, live manifests, Docker frontend, smoke coverage, and release documentation are implemented locally. No public deployment or release tag has been fabricated.
 
 ---
 
@@ -50,13 +50,19 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 - [x] Ride lifecycle with server-side state guard
 - [x] Pool creation + **atomic seat-capacity enforcement**
 - [x] Corridor/zone matching rule
-- [x] Per-passenger fare & status isolation
-- [x] Ride history + audit trail (`ride_events`)
+- [x] Per-passenger fare isolation + scoped ride history
+- [x] Pooled lifecycle/cancellation audit trail (`ride_events`)
 - [x] Cancellation while in a valid state
 - [x] Seed data with the story cast
-- [x] Docker Compose setup
-- [x] Tests (capacity, transitions, fare, authz, cancellation, concurrency)
-- [ ] Frontend (Next.js) — Day 2
+- [x] Docker Compose setup for PostgreSQL, API, and frontend
+- [x] Tests (capacity, transitions, fare, authz, cancellation, concurrency, signup, and full-pool rejection)
+- [x] Next.js passenger and driver consoles with responsive async states
+- [x] Privacy-safe live booking activity + driver manual assignment
+- [x] Passenger open-pool discovery, atomic join, and full-capacity 409 feedback
+- [x] Driver add-to-pool flow, seat meter, lifecycle actions, roster, and event trail
+- [x] New driver signup provisions a default capacity-3 vehicle
+- [x] Frontend production build and repeatable smoke check
+- [x] Desktop/mobile screenshots and Docker/Vercel deployment preparation
 
 ---
 
@@ -64,12 +70,14 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 
 Some requirements were intentionally left open. These are the assumptions made, documented, and applied consistently:
 
-1. **Matching rule:** two requests may share a vehicle if they have the **same pickup area** *OR* their pickup→destination corridors overlap (both heading the same general direction). Nusrat (Banani→Mohakhali) and Rafiq (Banani→Gulshan 1) both start in Banani heading south/east → compatible. Shirin matches the corridor but is bounded by remaining seats.
+1. **Matching rule:** the driver may assign a waiting request to a matched pool when it has the **same pickup area** *OR* an overlapping pickup→destination corridor with every existing member. Nusrat (Banani→Mohakhali), Rafiq (Banani→Gulshan 1), and Shirin (Banani→Dhanmondi) share Banani; capacity still determines who receives the last seat.
 2. **Money is stored as whole Taka (৳).** Values are integers — avoids floating-point drift and keeps fares exact and hand-verifiable.
 3. **Cancellation is allowed only in `REQUESTED` or `MATCHED`** (i.e. before the driver arrives). Once `DRIVER_ARRIVED` the trip is considered committed; only the driver/admin could cancel.
 4. **One active pool per vehicle at a time.** A vehicle's pool must reach `COMPLETED`/`CANCELLED` before a new one opens — keeps capacity accounting trivial and correct.
 5. **No real payment gateway.** Payment is Cash or a simulated **TeslaPay** wallet.
 6. **No map API.** Pickup/destination are a predefined list of Dhaka areas (`areas` table) with lat/lng centers; distance is computed with the Haversine formula between zone centers. This matches the brief's "keep geography simple" rule and keeps everything free and hand-testable.
+7. **Manual dispatch plus passenger joining:** passengers request rides first. A driver can manually select compatible waiting requests, and a passenger can join a compatible open pool from the passenger board. Both paths use the same atomic capacity guard; if the selected set or final-seat race exceeds capacity, the API returns `409 NO_SEATS` and the rejected request stays `REQUESTED`.
+8. **New driver provisioning:** driver signup creates a default offline capacity-3 vehicle in the same database transaction as the user. Jashim's seeded vehicle remains the primary demo vehicle.
 
 ---
 
@@ -94,7 +102,7 @@ flowchart LR
     end
 
     subgraph Ops["📦 Docker Compose"]
-        C1["api container"] ~~~ C2["postgres + healthcheck"]
+        C0["Next.js frontend"] --> C1["Express API"] --> C2["PostgreSQL + healthchecks"]
     end
 
     UI -- "HTTPS · JSON (REST)" --> MW
@@ -199,7 +207,8 @@ areas(id, name, lat, lng)                       -- Banani, Gulshan, Mohakhali, .
 ride_requests(id, passenger_id, pickup_area_id, dest_area_id, seats_requested,
               status[REQUESTED|MATCHED|DRIVER_ARRIVED|STARTED|COMPLETED|CANCELLED], created_at)
 pools(id, vehicle_id->vehicles, status, capacity, seats_taken, created_at, started_at, completed_at)
-pool_members(id, pool_id, request_id, seats, fare_taka, status)
+-- partial unique index: one non-terminal pool per vehicle
+pool_members(id, pool_id, request_id, seats, fare_taka)
 fares(id, request_id, base_taka, distance_taka, discount_taka, total_taka)
 ride_events(id, pool_id, actor_id, from_status, to_status, note, at)   -- audit/history
 payments(id, fare_id, method[cash|teslapay], status)                    -- simulated
@@ -239,7 +248,7 @@ const TRANSITIONS = {
 ```
 distance_km     = haversine(pickup_area.lat/lng, dest_area.lat/lng)
 subtotal_taka   = baseFare + round(distance_km * ratePerKm)
-poolDiscount    = poolSize >= 2 ? subtotal_taka * DISCOUNT_PCT : 0
+poolDiscount    = poolSize >= 2 ? round(subtotal_taka * DISCOUNT_PCT / 100) : 0
 passengerFare   = subtotal_taka - poolDiscount        // stored in whole Taka
 ```
 
@@ -266,11 +275,19 @@ passengerFare   = subtotal_taka - poolDiscount        // stored in whole Taka
 
 ```
 .
-├── frontend/          # Next.js app
+├── frontend/          # Next.js 14 App Router passenger/driver UI
+│   ├── app/            # routes, layout, global visual system
+│   ├── components/     # auth, passenger, driver, shared UI
+│   ├── lib/            # typed API client/contracts, session, statuses
+│   ├── scripts/        # production-shaped smoke check
+│   └── Dockerfile
 ├── backend/           # Express API + Prisma
 │   ├── prisma/        # schema, migrations, seed
-│   └── src/
+│   ├── src/           # routes, guards, pooling/lifecycle logic
+│   └── Dockerfile
+├── docs/screenshots/  # local desktop/mobile product captures
 ├── docker-compose.yml
+├── docker-compose.test.yml # disposable integration-test database
 ├── .env.example
 ├── read.md            # PRD deep analysis
 └── plan.md            # 2-day build plan
@@ -280,8 +297,8 @@ passengerFare   = subtotal_taka - poolDiscount        // stored in whole Taka
 
 ## 📋 Prerequisites
 
-- Node.js ≥ 20
-- Docker + Docker Compose
+- Node.js ≥ 20 (frontend and backend)
+- Docker + Docker Compose (recommended reproducible stack)
 - (Optional) PostgreSQL 17 if running outside Docker
 
 ---
@@ -291,32 +308,54 @@ passengerFare   = subtotal_taka - poolDiscount        // stored in whole Taka
 Copy `.env.example` → `.env`. **Never commit real secrets.**
 
 ```env
+# API
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/dhaka_tesla_pool
 JWT_SECRET=change-me
 PORT=4000
+
+# Next.js (the browser uses the same-origin rewrite by default)
+BACKEND_API_URL=http://localhost:4000
+NEXT_PUBLIC_API_URL=/api/backend
 ```
 
 ---
 
 ## 🚀 Local Setup
 
+### One-command local stack (recommended)
+
 ```bash
-# 1. install dependencies
-cd backend && npm install
-npx prisma generate
-
-# 2. start Postgres (Docker) 
-docker compose up -d db
-
-# 3. migrate + seed the story cast
-npx prisma migrate deploy
-npm run seed
-
-# 4. run the API (dev)
-npm run dev          # → http://localhost:4000/health
+cp .env.example .env                 # optional outside Docker; keep secrets local
+ docker compose up --build
 ```
 
-Frontend (Day 2): `cd frontend && npm install && npm run dev`.
+The API is seeded idempotently on startup. Open:
+
+- Frontend: `http://localhost:3000`
+- API health: `http://localhost:4000/health`
+- PostgreSQL: `localhost:5432`
+
+The frontend container receives `BACKEND_API_URL=http://api:4000` at build time and proxies `/api/backend/*` same-origin, so the browser does not need CORS configuration.
+
+### Separate local processes
+
+```bash
+# terminal 1 — database
+ docker compose up -d db
+cd backend
+ npm ci
+ npx prisma migrate deploy
+ npm run seed
+ npm run dev                         # http://localhost:4000
+
+# terminal 2 — frontend
+cd frontend
+npm ci
+cp .env.example .env.local          # BACKEND_API_URL=http://localhost:4000
+npm run dev                         # http://localhost:3000
+```
+
+Run `npm run typecheck` and `npm run build` in each app before sharing a build. The local API can be started without Docker only when PostgreSQL 17 is available and `DATABASE_URL` points at a disposable development database.
 
 ---
 
@@ -327,29 +366,42 @@ docker compose up --build
 ```
 
 Brings up:
-- **db** — `postgres:17-alpine`, volume `pgdata`, healthcheck `pg_isready`
-- **api** — builds `backend/`, waits for db healthy, runs `prisma migrate deploy` + `seed`, then starts; healthcheck `GET /health`
 
-`.env` is never committed — copy `.env.example` and set `JWT_SECRET`.
+- **db** — `postgres:17-alpine`, named volume `pgdata`, `pg_isready` healthcheck.
+- **api** — builds `backend/`, waits for db, runs `prisma migrate deploy` + idempotent seed, then serves `/health`.
+- **frontend** — builds `frontend/`, waits for API health, and serves the Next.js app on port 3000 with its own healthcheck.
+
+`docker compose down` preserves the database volume; use `docker compose down -v` only when intentionally resetting local demo data. `.env` is never committed — copy `.env.example` and set `JWT_SECRET` for a deployed environment.
 
 ---
 
 ## 🧪 Running Tests
 
 ```bash
+# pure logic, no database
 cd backend
-npm test             # runs vitest against DATABASE_URL (needs Postgres up)
+npm run test:unit
+
+# full suite against a disposable PostgreSQL database
+cd ..
+docker compose -f docker-compose.test.yml up --build --exit-code-from api-test
+docker compose -f docker-compose.test.yml down --remove-orphans
 ```
 
-Tests cover exactly what is risky:
-1. Bullet's capacity can never be exceeded (+ DB CHECK as second net)
-2. Invalid state transitions are rejected (409 INVALID_TRANSITION)
-3. Nusrat's and Rafiq's pooled fares calculate correctly (whole Taka)
-4. Users cannot modify another user's ride (403)
-5. Cancellation rules hold (releases seats; blocked once STARTED)
-6. Two concurrent requests cannot corrupt pool capacity (`Promise.all` race → one 201, one 409)
+The integration setup uses a fresh `dhaka_tesla_pool_test` database in an internal-only Postgres container. `backend/tests/setup.ts` refuses to run destructive tests unless the database name contains `test` **and** `ALLOW_DESTRUCTIVE_DB_TESTS=true`; never point that suite at a shared database.
 
-Pure-logic tests (fare, matching, state machine) run without a DB.
+Frontend checks:
+
+```bash
+cd frontend
+npm run typecheck
+npm run build
+npm run test:smoke             # expects the local stack on :3000
+```
+
+The smoke check verifies the rendered document, same-origin API rewrite, demo driver's manual-selection board, passenger history, privacy-safe activity, open-pool discovery, and capacity/joinability contracts. Browser walkthrough screenshots are in [`docs/screenshots/`](./docs/screenshots/).
+
+Backend coverage includes capacity, transition guards, fare math, authorization, cancellation, concurrent last-seat manual assignments, passenger open-pool joins, driver provisioning, active-pool additions, privacy-safe activity, and deterministic full-capacity rejection.
 
 ---
 
@@ -359,7 +411,8 @@ Seeded by `npm run seed` (password for all: `tesla123`):
 
 | Role | Email | Notes |
 |---|---|---|
-| Driver | `jashim@dhakatesla.bd` | owns **Bullet**, capacity **3**, online |
+| Driver | `jashim@dhakatesla.bd` | owns **Bullet**, capacity **3**, online after seed |
+| Any new driver | signup | receives a default offline capacity-3 vehicle in the signup transaction |
 | Passenger | `nusrat@dhakatesla.bd` | Banani → Mohakhali |
 | Passenger | `rafiq@dhakatesla.bd` | Banani → Gulshan 1 |
 | Passenger | `shirin@dhakatesla.bd` | arrives last, fights for the seat |
@@ -373,7 +426,7 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 ### Auth
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/auth/signup` | — | `{name,email,password,role}` → `{user,token}` |
+| POST | `/auth/signup` | — | `{name,email,password,role}` → `{user,token}`; driver accounts atomically receive a default capacity-3 vehicle |
 | POST | `/auth/login` | — | `{email,password}` → `{user,token}` |
 
 ### Areas & fare
@@ -385,22 +438,24 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 ### Rides (passenger)
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/rides` | passenger | request a ride → `REQUESTED` |
-| GET | `/rides` | passenger | my history only |
+| POST | `/rides` | passenger | create an unassigned request → `REQUESTED`; this does not book a pool |
+| GET | `/rides` | passenger | my history only; each item includes `pool` membership (or `null`) and never another passenger's fare |
+| GET | `/rides/activity` | passenger | privacy-safe anonymous view of other waiting routes; read-only |
 | GET | `/rides/:id` | passenger (owner) | own ride + own fare (403 for others) |
-| GET | `/rides/:id/matches` | passenger (owner) | compatible requests via matching rule |
-| DELETE | `/rides/:id` | passenger (owner) | cancel while `REQUESTED`/`MATCHED`, frees seats |
+| DELETE | `/rides/:id` | passenger (owner) | cancel while `REQUESTED`/`MATCHED`, releases seats atomically |
 
 ### Driver & pool
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/driver/requests` | driver | open requests + vehicle (Bullet, seats) |
+| GET | `/driver/requests` | driver | vehicle + waiting requests + corridor/active-pool validation hints |
 | POST | `/driver/online` | driver | toggle online/offline |
-| POST | `/driver/pools` | driver | open pool `{requestIds}` — atomic capacity check |
+| POST | `/driver/pools` | driver | manually assign selected `{requestIds}` — atomic capacity check |
+| POST | `/driver/pools/:id/requests` | driver (owner) | manually add selected compatible passengers before arrival |
 | GET | `/driver/pools` | driver | my pools, passengers, seats, events |
 | POST | `/driver/pools/:id/arrived\|start\|complete\|cancel` | driver (owner) | guarded lifecycle → 409 on illegal move |
-| POST | `/pools/:id/join` | passenger (owner) | join with own request — atomic seat claim |
-| GET | `/pools/:id` | driver or member | roster + own fare only (`myFareTaka`) |
+| GET | `/pools/open` | passenger (own request) | privacy-safe open-pool capacity, route corridor, and compatible/joinable request IDs |
+| POST | `/pools/:id/join` | passenger (own request) | atomically join a compatible open pool; full/late join returns `409 NO_SEATS` |
+| GET | `/pools/:id` | driver or assigned member | roster + own fare only (`myFareTaka`) |
 | GET | `/health` | — | liveness (Docker healthcheck) |
 
 ---
@@ -410,33 +465,103 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 | Decision | Alternative | Why this | When I'd switch |
 |---|---|---|---|
 | PostgreSQL | MySQL / SQLite | Row locking + FK integrity for capacity; SQLite's locking differs and won't represent production concurrency | Team-standard MySQL, or a pure-embedded demo |
-| Atomic conditional `UPDATE` for seat claim | Read-then-write check | Single statement, DB-guaranteed; can't overbook under race | Large scale → distributed lock / dedicated matching service |
+| Atomic conditional `UPDATE` for seat claim | Read-then-write check | Single statement, DB-guaranteed; can't overbook under race | Large scale → distributed lock / dedicated route-policy service |
 | Zone list + Haversine | Google Maps / Leaflet | Brief says don't fight map APIs; free, hand-testable, no keys | Real routing/ETA becomes a requirement |
 | JWT (stateless) | Sessions in Redis | No extra infra for an MVP | Need instant revocation → server-side sessions |
+| Next.js App Router | Separate SPA + custom router | Typed routes, server-rendered shell, and a small deployable frontend | Need a non-React native client or heavy SSR personalization |
+| Same-origin `/api/backend` rewrite | Direct browser CORS API | Keeps auth and API calls same-origin in local Docker/Vercel | Need independent API domains with a deliberate CORS/CSRF design |
+| Docker Compose multi-stage images | Platform-specific deploy scripts | Reproducible API + frontend + Postgres healthchecks | Managed platform-specific pipelines become preferable at scale |
 | Whole-Taka integer | DECIMAL/float | Exact math, no drift, trivially hand-verifiable | The product needs fractional-Taka fares |
 
 ---
 
 ## ⚠️ Known Limitations
 
-- Matching is zone/corridor based, not real routing or ETA.
-- No real payment gateway (Cash / simulated TeslaPay).
-- Real-time status uses polling, not WebSockets.
+- Driver assignment uses the deterministic zone/corridor rule, not real routing, traffic prediction, or ETA.
+- No real payment gateway (Cash / simulated TeslaPay); the UI does not collect payment details.
+- Live status uses simple five-second polling rather than WebSockets/SSE.
+- JWTs are stateless and last seven days; there is no refresh-token or server-side revocation flow.
+- Passenger joining is limited to compatible open pools and their own `REQUESTED` ride; a production matcher would rank candidates and provide clearer ETA/route guarantees.
+- The smoke test uses seeded demo accounts and does not replace a full browser test suite.
 
 ---
 
 ## 🔭 Next Improvements
 
-- PostGIS geospatial matching, read replicas, caching, queue-based matching at scale (see bonus scaling section).
+- PostGIS geospatial matching, route-aware ETA, and corridor versioning.
+- Idempotency keys for driver assignment mutations, plus a short-lived availability snapshot.
+- Refresh tokens, rate limiting, structured logs/tracing, and automated backups.
+- SSE/WebSocket updates once the lifecycle event stream is separated from request/response polling.
+- A larger browser test matrix and seeded, isolated end-to-end fixtures.
+
+---
+
+## 📸 Product Screenshots
+
+The captures below are local, real product screenshots (no external image service or fabricated deployment UI):
+
+| Passenger flow | Driver dispatch |
+|---|---|
+| ![Passenger pooled manifest and private status](./docs/screenshots/passenger-pooled-desktop.png) | ![Driver manifest and seat meter](./docs/screenshots/driver-active-desktop.png) |
+| ![Passenger mobile pooled manifest](./docs/screenshots/passenger-pooled-mobile.png) | ![Driver mobile history](./docs/screenshots/driver-history-mobile.png) |
+
+Also captured: [auth desktop](./docs/screenshots/auth-desktop.png), [auth mobile](./docs/screenshots/auth-mobile.png), [passenger request desktop](./docs/screenshots/passenger-request-desktop.png), and [driver empty board desktop](./docs/screenshots/driver-empty-desktop.png). The files are intentionally committed as documentation assets; generated browser reports and local secrets remain ignored.
+
+---
+
+## 🚀 Deployment Preparation
+
+### Vercel-compatible frontend
+
+1. Create a Vercel project with **Root Directory** set to `frontend`.
+2. Set `NEXT_PUBLIC_API_URL=/api/backend`.
+3. Set `BACKEND_API_URL` to the HTTPS API origin that is reachable from the Vercel build/runtime (the same-origin rewrite is compiled from this value).
+4. Deploy the API/PostgreSQL separately using the Docker instructions or a managed PostgreSQL provider. Set its `DATABASE_URL`, `JWT_SECRET`, and fare variables.
+5. Confirm `/health`, login, and `/api/backend/health` from the deployed frontend before sharing a URL.
+
+No live Vercel/API URL is included because deployment credentials and a verified public deployment were not available in this environment. The configuration is prepared; the URL remains an honest TODO rather than a fabricated link.
+
+### Docker deployment
+
+`docker compose up --build -d` is the reproducible single-host deployment. Put a TLS-terminating reverse proxy in front of ports 3000/4000, use a managed secret for `JWT_SECRET`, restrict PostgreSQL exposure, and run migrations through the API container. For a clean host, clone the repository, create `.env` from `.env.example`, set secrets, and run the compose command; no generated `.next`, `node_modules`, database volume, or environment file is needed in source control.
+
+---
+
+## 📈 If the pool goes viral
+
+The MVP intentionally keeps one API and one relational database. At larger scale, the first bottlenecks would be request-board queries, pool-row contention, and polling fan-out—not the UI. A practical evolution is:
+
+```mermaid
+flowchart LR
+  UI[Next.js clients] --> LB[Load balancer]
+  LB --> API[Stateless API replicas]
+  API --> PG[(PostgreSQL primary)]
+  API --> CACHE[(Short-lived availability cache)]
+  API --> EVENTS[(Lifecycle event stream)]
+  EVENTS --> PUSH[SSE/WebSocket gateway]
+  PUSH --> UI
+  PG --> READ[(Read replicas)]
+  API --> OBS[Metrics, traces, audit logs]
+```
+
+- **Capacity correctness:** keep the atomic conditional seat update or move claims to a serializable route-policy service; never replace it with a read-then-write check. Add idempotency keys to driver assignment mutations.
+- **Compatibility validation:** move zone/corridor heuristics to PostGIS/geohash indexes, then version the corridor policy and retain the driver's selection plus validation decision in the audit trail.
+- **Scale reads:** add read replicas for history and a carefully invalidated cache for the driver's waiting-request board; never cache a stale capacity decision as authoritative.
+- **Live updates:** publish committed lifecycle events to SSE/WebSockets while retaining polling as a reconnect/fallback path.
+- **Reliability:** add rate limits, request tracing, idempotent consumers, dead-letter handling, backups, and database connection-pool tuning.
+- **Deployment:** run multiple stateless API replicas behind a load balancer, use managed PostgreSQL with point-in-time recovery, and deploy the frontend independently.
 
 ---
 
 ## 🤖 AI Usage
 
-_(Tools used, one accepted suggestion, one rejected/changed suggestion — filled before submission.)_
+OpenCode was used as the implementation assistant for repository inspection, API contract alignment, React/Next.js UI implementation, test fixtures, Docker configuration, and documentation drafting. I reviewed the changes and ran the checks listed above; the implementation remains grounded in the existing Express/Prisma architecture and local evidence.
+
+- **Accepted suggestion:** keep capacity enforcement in one atomic conditional database update and run the same transaction through membership/status/fare writes. This directly supports the last-seat race and avoids a misleading frontend-only guard.
+- **Rejected/changed suggestion:** do not add a map provider, WebSocket service, queue, or generic component library for this MVP. The brief explicitly values a simple area/corridor model and five-second polling, so those additions would increase infrastructure without improving the required evaluator story.
 
 ---
 
 ## 🎬 Demo Video
 
-_(6-minute Loom link — filled before submission.)_
+**Not recorded yet — honest placeholder.** Add a verified six-minute walkthrough URL after recording passenger request → driver manual passenger selection → final-seat rejection → driver lifecycle → scoped history. No live or fabricated video URL is included.

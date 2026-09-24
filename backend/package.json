@@ -13,6 +13,8 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:unit": "vitest run tests/unit.test.ts",
+    "test:integration": "vitest run tests/pool.test.ts",
     "test:watch": "vitest",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",

@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
+import { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
 import { AppError } from "../lib/errors";
 
@@ -23,6 +24,27 @@ export function errorHandler(
         details: err.errors,
       },
     });
+  }
+
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === "P2002") {
+      return res.status(409).json({
+        error: { code: "CONFLICT", message: "That resource already exists" },
+      });
+    }
+    if (err.code === "P2025") {
+      return res.status(404).json({
+        error: { code: "NOT_FOUND", message: "Resource not found" },
+      });
+    }
+    if (err.code === "P2034") {
+      return res.status(409).json({
+        error: {
+          code: "TRANSACTION_RETRY",
+          message: "The resource changed at the same time. Please retry.",
+        },
+      });
+    }
   }
 
   // Unexpected - log fully, never leak internals to the client

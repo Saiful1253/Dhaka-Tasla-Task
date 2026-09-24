@@ -37,7 +37,11 @@ async function main() {
   // Driver: Jashim
   const jashim = await prisma.user.upsert({
     where: { email: "jashim@dhakatesla.bd" },
-    update: {},
+    update: {
+      name: "Jashim",
+      passwordHash,
+      role: "driver",
+    },
     create: {
       name: "Jashim",
       email: "jashim@dhakatesla.bd",
@@ -46,18 +50,33 @@ async function main() {
     },
   });
 
-  // Bullet - the 3-seat Tesla
-  await prisma.vehicle.upsert({
-    where: { id: 1 },
-    update: {},
-    create: {
-      driverId: jashim.id,
-      name: "Bullet",
-      capacity: 3,
-      plate: "DHK-BULLET-01",
-      isOnline: true,
-    },
+  // Bullet - the 3-seat Tesla. Look up by driver rather than by a global
+  // vehicle id: seeded databases can have different user sequences, and an
+  // id-1 upsert can otherwise attach Bullet to the wrong account.
+  const bullet = await prisma.vehicle.findFirst({
+    where: { driverId: jashim.id },
   });
+  if (bullet) {
+    await prisma.vehicle.update({
+      where: { id: bullet.id },
+      data: {
+        name: "Bullet",
+        capacity: 3,
+        plate: "DHK-BULLET-01",
+        isOnline: true,
+      },
+    });
+  } else {
+    await prisma.vehicle.create({
+      data: {
+        driverId: jashim.id,
+        name: "Bullet",
+        capacity: 3,
+        plate: "DHK-BULLET-01",
+        isOnline: true,
+      },
+    });
+  }
 
   // Passengers: Nusrat, Rafiq, Shirin
   const passengers = [
@@ -69,7 +88,7 @@ async function main() {
   for (const p of passengers) {
     await prisma.user.upsert({
       where: { email: p.email },
-      update: {},
+      update: { name: p.name, passwordHash, role: "passenger" },
       create: { ...p, passwordHash, role: "passenger" },
     });
   }

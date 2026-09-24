@@ -23,7 +23,8 @@ export const errors = {
   notFound: (what = "Resource") =>
     new AppError(404, "NOT_FOUND", `${what} not found`),
   conflict: (code: string, msg: string) => new AppError(409, code, msg),
-  noSeats: () => new AppError(409, "NO_SEATS", "No seats available in this pool"),
+  noSeats: (message = "No seats available in this pool") =>
+    new AppError(409, "NO_SEATS", message),
   invalidTransition: (from: string, to: string) =>
     new AppError(
       409,

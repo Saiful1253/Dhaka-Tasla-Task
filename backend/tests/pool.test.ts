@@ -1,6 +1,6 @@
 import request from "supertest";
 import bcrypt from "bcryptjs";
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { createApp } from "../src/app";
 import { prisma, resetDb, closeDb } from "./setup";
 import { computeFare } from "../src/lib/fare";
@@ -97,6 +97,13 @@ beforeAll(async () => {
   shirinToken = await login("shirin@test.bd");
 });
 
+beforeEach(async () => {
+  // Every integration example starts from an empty ride/pool ledger while the
+  // disposable database and story accounts remain stable for the whole file.
+  await prisma.pool.deleteMany({});
+  await prisma.rideRequest.deleteMany({});
+});
+
 afterAll(async () => {
   await closeDb();
 });
@@ -121,7 +128,7 @@ describe("1. Bullet's capacity can never be exceeded", () => {
     await prisma.pool.deleteMany({});
   });
 
-  it("rejects a join that would push seatsTaken past capacity", async () => {
+  it("rejects a driver's manual assignment that would push seatsTaken past capacity", async () => {
     const a = await makeRide(nusratToken, bananiId, mohakhaliId, 1);
     const b = await makeRide(rafiqToken, bananiId, gulshan1Id, 1);
     const c = await makeRide(shirinToken, bananiId, mohakhaliId, 2); // wants 2
@@ -133,13 +140,13 @@ describe("1. Bullet's capacity can never be exceeded", () => {
     expect(poolRes.status).toBe(201);
     const poolId = poolRes.body.pool.id;
 
-    // 2 taken + 2 wanted = 4 > 3
-    const join = await request(app)
-      .post(`/pools/${poolId}/join`)
-      .set("Authorization", `Bearer ${shirinToken}`)
-      .send({ requestId: c.id });
-    expect(join.status).toBe(409);
-    expect(join.body.error.code).toBe("NO_SEATS");
+    // 2 taken + 2 manually selected = 4 > 3
+    const assignment = await request(app)
+      .post(`/driver/pools/${poolId}/requests`)
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [c.id] });
+    expect(assignment.status).toBe(409);
+    expect(assignment.body.error.code).toBe("NO_SEATS");
 
     const pool = await prisma.pool.findUnique({ where: { id: poolId } });
     expect(pool!.seatsTaken).toBeLessThanOrEqual(pool!.capacity);
@@ -374,8 +381,8 @@ describe("5. Cancellation rules hold", () => {
 });
 
 // ---------------------------------------------------------------------------
-describe("6. Two concurrent requests can't corrupt pool capacity", () => {
-  it("exactly one of Nusrat/Shirin wins the last seat (race)", async () => {
+describe("6. Two concurrent manual assignments can't corrupt pool capacity", () => {
+  it("exactly one driver assignment wins the last seat (race)", async () => {
     await prisma.rideRequest.deleteMany({});
     await prisma.pool.deleteMany({});
 
@@ -388,19 +395,19 @@ describe("6. Two concurrent requests can't corrupt pool capacity", () => {
       .send({ requestIds: [n.id, r.id] });
     const poolId = poolRes.body.pool.id;
 
-    // LAST seat - two passengers race for it at the same instant
+    // LAST seat - two passenger requests are selected at the same instant
     const s1 = await makeRide(shirinToken, bananiId, mohakhaliId, 1);
     const s2 = await makeRide(shirinToken, bananiId, dhanmondiId, 1);
 
     const [res1, res2] = await Promise.all([
       request(app)
-        .post(`/pools/${poolId}/join`)
-        .set("Authorization", `Bearer ${shirinToken}`)
-        .send({ requestId: s1.id }),
+        .post(`/driver/pools/${poolId}/requests`)
+        .set("Authorization", `Bearer ${jashimToken}`)
+        .send({ requestIds: [s1.id] }),
       request(app)
-        .post(`/pools/${poolId}/join`)
-        .set("Authorization", `Bearer ${shirinToken}`)
-        .send({ requestId: s2.id }),
+        .post(`/driver/pools/${poolId}/requests`)
+        .set("Authorization", `Bearer ${jashimToken}`)
+        .send({ requestIds: [s2.id] }),
     ]);
 
     const statuses = [res1.status, res2.status].sort();
@@ -431,5 +438,322 @@ describe("6. Two concurrent requests can't corrupt pool capacity", () => {
 
     expect(open.status).toBe(409);
     expect(open.body.error.code).toBe("INCOMPATIBLE");
+  });
+});
+
+describe("7. Day-2 signup, manual assignment, and last-seat contracts", () => {
+  it("provisions a usable capacity-3 vehicle for a newly registered driver", async () => {
+    const email = `new-driver-${Date.now()}@test.bd`;
+    const signup = await request(app)
+      .post("/auth/signup")
+      .send({
+        name: "New Driver",
+        email,
+        password: "tesla123",
+        role: "driver",
+      });
+    expect(signup.status).toBe(201);
+    expect(signup.body.user.role).toBe("driver");
+
+    const board = await request(app)
+      .get("/driver/requests")
+      .set("Authorization", `Bearer ${signup.body.token}`);
+    expect(board.status).toBe(200);
+    expect(board.body.vehicle.capacity).toBe(3);
+    expect(board.body.vehicle.isOnline).toBe(false);
+
+    const vehicle = await prisma.vehicle.findFirst({
+      where: { driver: { email } },
+    });
+    expect(vehicle).not.toBeNull();
+    expect(vehicle!.capacity).toBe(3);
+  });
+
+  it("registers and signs in a passenger without provisioning a vehicle", async () => {
+    const email = `new-passenger-${Date.now()}@test.bd`;
+    const signup = await request(app)
+      .post("/auth/signup")
+      .send({
+        name: "New Passenger",
+        email: `  ${email.toUpperCase()}  `,
+        password: "tesla123",
+        role: "passenger",
+      });
+    expect(signup.status).toBe(201);
+    expect(signup.body.user.role).toBe("passenger");
+    expect(signup.body.user.email).toBe(email);
+
+    const login = await request(app)
+      .post("/auth/login")
+      .send({ email: email.toUpperCase(), password: "tesla123" });
+    expect(login.status).toBe(200);
+    expect(login.body.user.id).toBe(signup.body.user.id);
+
+    const rides = await request(app)
+      .get("/rides")
+      .set("Authorization", `Bearer ${login.body.token}`);
+    expect(rides.status).toBe(200);
+    expect(rides.body.rides).toEqual([]);
+    const vehicles = await prisma.vehicle.count({
+      where: { driver: { email } },
+    });
+    expect(vehicles).toBe(0);
+  });
+
+  it("returns a structurally complete unpooled ride after creation", async () => {
+    const created = await request(app)
+      .post("/rides")
+      .set("Authorization", `Bearer ${nusratToken}`)
+      .send({ pickupAreaId: bananiId, destAreaId: mohakhaliId, seats: 1 });
+    expect(created.status).toBe(201);
+    expect(created.body.ride).toHaveProperty("pool", null);
+    expect(created.body.ride).toHaveProperty("fare");
+  });
+
+  it("rejects invalid estimate ranges instead of returning misleading fares", async () => {
+    const invalidSeats = await request(app)
+      .get("/rides/estimate")
+      .query({ pickup: bananiId, dest: mohakhaliId, seats: 4 });
+    expect(invalidSeats.status).toBe(400);
+    expect(invalidSeats.body.error.code).toBe("BAD_REQUEST");
+
+    const invalidPool = await request(app)
+      .get("/rides/estimate")
+      .query({ pickup: bananiId, dest: mohakhaliId, poolSize: 0 });
+    expect(invalidPool.status).toBe(400);
+    expect(invalidPool.body.error.code).toBe("BAD_REQUEST");
+  });
+
+  it("keeps passenger ride resources passenger-only", async () => {
+    const signup = await request(app)
+      .post("/auth/signup")
+      .send({
+        name: "Route Guard",
+        email: `route-guard-${Date.now()}@test.bd`,
+        password: "tesla123",
+        role: "driver",
+      });
+    const rides = await request(app)
+      .get("/rides")
+      .set("Authorization", `Bearer ${signup.body.token}`);
+    expect(rides.status).toBe(403);
+  });
+
+  it("supports passenger open-pool discovery and atomic last-seat join/rejection", async () => {
+    const n = await makeRide(nusratToken, bananiId, mohakhaliId, 1);
+    const r = await makeRide(rafiqToken, bananiId, gulshan1Id, 1);
+    const opened = await request(app)
+      .post("/driver/pools")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [n.id, r.id] });
+    expect(opened.status).toBe(201);
+    const poolId = opened.body.pool.id;
+
+    // The last-seat path uses the story's divergent Banani → Dhanmondi route;
+    // same pickup keeps it compatible while Bullet's final seat enforces the cap.
+    const finalSeat = await makeRide(shirinToken, bananiId, dhanmondiId, 1);
+    const openForShirin = await request(app)
+      .get("/pools/open")
+      .set("Authorization", `Bearer ${shirinToken}`);
+    expect(openForShirin.status).toBe(200);
+    const openPool = openForShirin.body.pools.find(
+      (pool: { id: number }) => pool.id === poolId,
+    );
+    expect(openPool.capacityState).toBe("last-seat");
+    expect(openPool.joinableRequestIds).toContain(finalSeat.id);
+    expect(openPool).not.toHaveProperty("fareTaka");
+
+    const accepted = await request(app)
+      .post(`/pools/${poolId}/join`)
+      .set("Authorization", `Bearer ${shirinToken}`)
+      .send({ requestId: finalSeat.id });
+    expect(accepted.status).toBe(201);
+    expect(accepted.body.seatsTaken).toBe(3);
+
+    const rejectedRequest = await makeRide(nusratToken, bananiId, gulshan1Id, 1);
+    const openForNusrat = await request(app)
+      .get("/pools/open")
+      .set("Authorization", `Bearer ${nusratToken}`);
+    const fullPool = openForNusrat.body.pools.find(
+      (pool: { id: number }) => pool.id === poolId,
+    );
+    expect(fullPool.capacityState).toBe("full");
+    expect(fullPool.joinableRequestIds).not.toContain(rejectedRequest.id);
+
+    const rejected = await request(app)
+      .post(`/pools/${poolId}/join`)
+      .set("Authorization", `Bearer ${nusratToken}`)
+      .send({ requestId: rejectedRequest.id });
+    expect(rejected.status).toBe(409);
+    expect(rejected.body.error.code).toBe("NO_SEATS");
+
+    const unchanged = await prisma.rideRequest.findUnique({
+      where: { id: rejectedRequest.id },
+    });
+    expect(unchanged!.status).toBe("REQUESTED");
+    const pool = await prisma.pool.findUnique({ where: { id: poolId } });
+    expect(pool!.seatsTaken).toBe(3);
+
+    const details = await request(app)
+      .get(`/pools/${poolId}`)
+      .set("Authorization", `Bearer ${shirinToken}`);
+    expect(details.status).toBe(200);
+    const own = details.body.pool.members.find(
+      (member: { isMe: boolean }) => member.isMe,
+    );
+    const others = details.body.pool.members.filter(
+      (member: { isMe: boolean }) => !member.isMe,
+    );
+    expect(own.myFareTaka).not.toBeNull();
+    expect(others.every((member: { myFareTaka: null }) => member.myFareTaka === null)).toBe(true);
+  });
+
+  it("adds compatible requests to the active pool and exposes pool membership in history", async () => {
+    const n = await makeRide(nusratToken, bananiId, mohakhaliId, 1);
+    const opened = await request(app)
+      .post("/driver/pools")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [n.id] });
+    expect(opened.status).toBe(201);
+    const poolId = opened.body.pool.id;
+
+    const r = await makeRide(rafiqToken, bananiId, gulshan1Id, 1);
+    const feed = await request(app)
+      .get("/driver/requests")
+      .set("Authorization", `Bearer ${jashimToken}`);
+    const feedRequest = feed.body.requests.find(
+      (item: { id: number }) => item.id === r.id,
+    );
+    expect(feedRequest.compatibility.fitsActivePool).toBe(true);
+    expect(feedRequest.compatibility.addableToActivePool).toBe(true);
+
+    const added = await request(app)
+      .post(`/driver/pools/${poolId}/requests`)
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [r.id] });
+    expect(added.status).toBe(201);
+    expect(added.body.pool.seatsTaken).toBe(2);
+
+    const history = await request(app)
+      .get("/rides")
+      .set("Authorization", `Bearer ${rafiqToken}`);
+    const ownRide = history.body.rides.find(
+      (ride: { id: number }) => ride.id === r.id,
+    );
+    expect(ownRide.pool.id).toBe(poolId);
+    expect(ownRide.poolMembers).toBeUndefined();
+
+    const secondPool = await request(app)
+      .post("/driver/pools")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [(await makeRide(shirinToken, bananiId, mohakhaliId, 1)).id] });
+    expect(secondPool.status).toBe(409);
+    expect(secondPool.body.error.code).toBe("ACTIVE_POOL_EXISTS");
+  });
+
+  it("keeps one active pool per vehicle under concurrent opens", async () => {
+    const first = await makeRide(nusratToken, bananiId, mohakhaliId, 1);
+    const second = await makeRide(rafiqToken, bananiId, gulshan1Id, 1);
+
+    const [firstResult, secondResult] = await Promise.all([
+      request(app)
+        .post("/driver/pools")
+        .set("Authorization", `Bearer ${jashimToken}`)
+        .send({ requestIds: [first.id] }),
+      request(app)
+        .post("/driver/pools")
+        .set("Authorization", `Bearer ${jashimToken}`)
+        .send({ requestIds: [second.id] }),
+    ]);
+
+    expect([firstResult.status, secondResult.status].sort()).toEqual([201, 409]);
+    const activePools = await prisma.pool.count({
+      where: { status: { in: ["REQUESTED", "MATCHED", "DRIVER_ARRIVED", "STARTED"] } },
+    });
+    expect(activePools).toBe(1);
+  });
+});
+
+describe("8. Privacy-safe passenger live booking activity", () => {
+  it("requires an authenticated passenger", async () => {
+    const anonymous = await request(app).get("/rides/activity");
+    expect(anonymous.status).toBe(401);
+
+    const driver = await request(app)
+      .get("/rides/activity")
+      .set("Authorization", `Bearer ${jashimToken}`);
+    expect(driver.status).toBe(403);
+  });
+
+  it("returns only other REQUESTED rides in newest-first, privacy-safe form", async () => {
+    const own = await makeRide(nusratToken, bananiId, mohakhaliId, 1);
+    const older = await makeRide(rafiqToken, bananiId, gulshan1Id, 2);
+    const newer = await makeRide(shirinToken, bananiId, dhanmondiId, 1);
+    const notWaiting = await makeRide(rafiqToken, bananiId, uttaraId, 1);
+
+    await prisma.rideRequest.update({
+      where: { id: notWaiting.id },
+      data: {
+        status: "MATCHED",
+        createdAt: new Date("2026-01-01T12:00:00.000Z"),
+      },
+    });
+    await prisma.rideRequest.update({
+      where: { id: older.id },
+      data: { createdAt: new Date("2026-01-01T10:00:00.000Z") },
+    });
+    await prisma.rideRequest.update({
+      where: { id: newer.id },
+      data: { createdAt: new Date("2026-01-01T11:00:00.000Z") },
+    });
+
+    const response = await request(app)
+      .get("/rides/activity")
+      .set("Authorization", `Bearer ${nusratToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toContain("no-store");
+    expect(response.body.activeCount).toBe(2);
+    expect(response.body.requests).toHaveLength(2);
+    expect(response.body.requests[0].destination).toBe("Dhanmondi");
+    expect(response.body.requests[1].destination).toBe("Gulshan 1");
+    expect(new Date(response.body.requests[0].createdAt).getTime()).toBeGreaterThan(
+      new Date(response.body.requests[1].createdAt).getTime(),
+    );
+
+    const allowedKeys = [
+      "activityId",
+      "createdAt",
+      "destination",
+      "pickup",
+      "seats",
+    ];
+    for (const row of response.body.requests) {
+      expect(Object.keys(row).sort()).toEqual(allowedKeys);
+      expect(row.activityId).toMatch(/^act_[a-f0-9]{16}$/);
+      expect(row.activityId).not.toBe(String(own.id));
+      expect(row.pickup).toBe("Banani");
+      expect(row.seats).toBeGreaterThanOrEqual(1);
+    }
+
+    const serialized = JSON.stringify(response.body);
+    expect(serialized).not.toMatch(/Nusrat|Rafiq|Shirin|passengerId|passenger|email|fare|status|requestId|pool/i);
+    expect(response.body.refreshedAt).toEqual(expect.any(String));
+    expect(Number.isNaN(new Date(response.body.refreshedAt).getTime())).toBe(false);
+  });
+
+  it("caps displayed rows while keeping the live total", async () => {
+    for (let index = 0; index < 21; index += 1) {
+      const token = index % 2 === 0 ? rafiqToken : shirinToken;
+      await makeRide(token, bananiId, index % 2 === 0 ? mohakhaliId : gulshan1Id, 1);
+    }
+
+    const response = await request(app)
+      .get("/rides/activity")
+      .set("Authorization", `Bearer ${nusratToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.activeCount).toBe(21);
+    expect(response.body.requests).toHaveLength(20);
   });
 });

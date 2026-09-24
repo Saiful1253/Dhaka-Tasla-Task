@@ -9,6 +9,7 @@ import { areCompatible } from "../src/lib/matching";
 const banani = { lat: 23.7937, lng: 90.4066 };
 const mohakhali = { lat: 23.7806, lng: 90.4074 };
 const gulshan1 = { lat: 23.7925, lng: 90.4078 };
+const dhanmondi = { lat: 23.7461, lng: 90.3742 };
 const uttara = { lat: 23.8759, lng: 90.3795 };
 
 describe("fare (pure, hand-testable)", () => {
@@ -79,6 +80,15 @@ describe("matching rule", () => {
       areCompatible(
         { pickup: banani, dest: mohakhali },
         { pickup: banani, dest: gulshan1 }
+      )
+    ).toBe(true);
+  });
+
+  it("same pickup remains compatible when final stops diverge", () => {
+    expect(
+      areCompatible(
+        { pickup: banani, dest: mohakhali },
+        { pickup: banani, dest: dhanmondi }
       )
     ).toBe(true);
   });

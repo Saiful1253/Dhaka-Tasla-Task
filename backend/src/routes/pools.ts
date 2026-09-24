@@ -1,5 +1,10 @@
-import { Router } from "express";
-import type { Prisma } from "@prisma/client";
+import {
+  Router,
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
+import type { PoolStatus, Prisma, RideStatus } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { requireAuth, requireRole } from "../middleware/auth";
@@ -33,21 +38,9 @@ async function claimSeatsTx(
   return updated === 1;
 }
 
-async function claimSeats(poolId: number, seats: number): Promise<boolean> {
-  return claimSeatsTx(prisma, poolId, seats);
-}
-
-/** Same statement, in reverse - used on cancel/removal. */
-async function releaseSeats(poolId: number, seats: number) {
-  await prisma.$executeRaw`
-    UPDATE pools
-       SET seats_taken = GREATEST(seats_taken - ${seats}, 0)
-     WHERE id = ${poolId}`;
-}
-
-/** Recompute every member's individual fare after membership changes. */
-async function recalcFares(poolId: number) {
-  const pool = await prisma.pool.findUnique({
+/** Recompute every member's individual fare inside the membership transaction. */
+async function recalcFaresTx(tx: Tx, poolId: number) {
+  const pool = await tx.pool.findUnique({
     where: { id: poolId },
     include: {
       members: {
@@ -59,17 +52,22 @@ async function recalcFares(poolId: number) {
   });
   if (!pool || pool.members.length === 0) return;
 
+  // The business rule keys the discount off the number of pooled requests,
+  // while seat capacity is independently counted by `seats`.
   const poolSize = pool.members.length;
-  for (const m of pool.members) {
+  for (const member of pool.members) {
     const fare = computeFare({
-      pickup: { lat: m.request.pickupArea.lat, lng: m.request.pickupArea.lng },
-      dest: { lat: m.request.destArea.lat, lng: m.request.destArea.lng },
+      pickup: {
+        lat: member.request.pickupArea.lat,
+        lng: member.request.pickupArea.lng,
+      },
+      dest: { lat: member.request.destArea.lat, lng: member.request.destArea.lng },
       poolSize,
     });
 
-    if (m.request.fare) {
-      await prisma.fare.update({
-        where: { id: m.request.fare.id },
+    if (member.request.fare) {
+      await tx.fare.update({
+        where: { id: member.request.fare.id },
         data: {
           discountTaka: fare.discountTaka,
           totalTaka: fare.totalTaka,
@@ -77,8 +75,8 @@ async function recalcFares(poolId: number) {
         },
       });
     }
-    await prisma.poolMember.update({
-      where: { id: m.id },
+    await tx.poolMember.update({
+      where: { id: member.id },
       data: { fareTaka: fare.totalTaka },
     });
   }
@@ -97,10 +95,36 @@ function assertDriverOwns(vehicleDriverId: number, userId: number) {
   if (vehicleDriverId !== userId) throw errors.forbidden("Not your vehicle");
 }
 
-const joinSchema = z.object({ requestId: z.number().int().positive() });
+type RouteRequest = {
+  pickupArea: { lat: number; lng: number };
+  destArea: { lat: number; lng: number };
+};
+
+function tripEnds(route: RouteRequest) {
+  return {
+    pickup: { lat: route.pickupArea.lat, lng: route.pickupArea.lng },
+    dest: { lat: route.destArea.lat, lng: route.destArea.lng },
+  };
+}
+
+function requestsShareCorridor(routes: RouteRequest[]): boolean {
+  // Compatibility is pairwise. Checking every route against the first member
+  // alone is incorrect when nearby pickup groups overlap in a larger manifest.
+  return routes.every((route, index) =>
+    routes
+      .slice(index + 1)
+      .every((other) => areCompatible(tripEnds(route), tripEnds(other))),
+  );
+}
+
 const openPoolSchema = z.object({
-  requestIds: z.array(z.number().int().positive()).min(1),
+  requestIds: z
+    .array(z.number().int().positive())
+    .min(1)
+    .transform((ids) => [...new Set(ids)]),
 });
+const addRequestsSchema = openPoolSchema;
+const joinSchema = z.object({ requestId: z.number().int().positive() });
 
 // ---------------------------------------------------------------------------
 // Driver endpoints
@@ -109,7 +133,7 @@ const openPoolSchema = z.object({
 export const driverRouter = Router();
 driverRouter.use(requireAuth, requireRole("driver"));
 
-/** GET /driver/requests - relevant REQUESTED rides + this driver's vehicle */
+/** GET /driver/requests - waiting rides for this driver's manual selection board */
 driverRouter.get("/requests", async (req, res, next) => {
   try {
     const vehicle = await prisma.vehicle.findFirst({
@@ -117,16 +141,37 @@ driverRouter.get("/requests", async (req, res, next) => {
     });
     if (!vehicle) throw errors.notFound("Vehicle");
 
-    const open = await prisma.rideRequest.findMany({
-      where: { status: "REQUESTED" },
-      include: {
-        passenger: { select: { id: true, name: true } },
-        pickupArea: true,
-        destArea: true,
-        fare: true,
-      },
-      orderBy: { createdAt: "asc" },
-    });
+    const [open, activePool] = await Promise.all([
+      prisma.rideRequest.findMany({
+        where: { status: "REQUESTED" },
+        include: {
+          passenger: { select: { id: true, name: true } },
+          pickupArea: true,
+          destArea: true,
+          fare: true,
+        },
+        orderBy: { createdAt: "asc" },
+      }),
+      prisma.pool.findFirst({
+        where: {
+          vehicleId: vehicle.id,
+          status: { in: ["REQUESTED", "MATCHED", "DRIVER_ARRIVED", "STARTED"] },
+        },
+        include: {
+          members: {
+            include: {
+              request: { include: { pickupArea: true, destArea: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+
+    const activeRoutes = activePool?.members.map((member) => member.request) ?? [];
+    const remainingSeats = activePool
+      ? Math.max(0, activePool.capacity - activePool.seatsTaken)
+      : vehicle.capacity;
 
     res.json({
       vehicle: {
@@ -135,16 +180,35 @@ driverRouter.get("/requests", async (req, res, next) => {
         capacity: vehicle.capacity,
         isOnline: vehicle.isOnline,
       },
-      requests: open.map((r) => ({
-        id: r.id,
-        passenger: r.passenger,
-        pickup: r.pickupArea.name,
-        dest: r.destArea.name,
-        seats: r.seatsRequested,
-        status: r.status,
-        estimatedFareTaka: r.fare?.totalTaka ?? null,
-        createdAt: r.createdAt,
-      })),
+      requests: open.map((r) => {
+        const fitsActivePool = activePool
+          ? requestsShareCorridor([...activeRoutes, r])
+          : null;
+        return {
+          id: r.id,
+          passenger: r.passenger,
+          pickup: r.pickupArea.name,
+          dest: r.destArea.name,
+          seats: r.seatsRequested,
+          status: r.status,
+          estimatedFareTaka: r.fare?.totalTaka ?? null,
+          createdAt: r.createdAt,
+          compatibility: {
+            activePoolId: activePool?.id ?? null,
+            activePoolStatus: activePool?.status ?? null,
+            fitsActivePool,
+            addableToActivePool:
+              activePool?.status === "MATCHED" &&
+              vehicle.isOnline &&
+              Boolean(fitsActivePool) &&
+              r.seatsRequested <= remainingSeats,
+            compatibleRequestIds: open
+              .filter((other) => other.id !== r.id)
+              .filter((other) => areCompatible(tripEnds(r), tripEnds(other)))
+              .map((other) => other.id),
+          },
+        };
+      }),
     });
   } catch (e) {
     next(e);
@@ -169,8 +233,9 @@ driverRouter.post("/online", async (req, res, next) => {
 });
 
 /**
- * POST /driver/pools - open a pool with one or more requests.
- * Capacity is enforced atomically; over-capacity => 409 NO_SEATS.
+ * POST /driver/pools - manually assign one or more passenger requests.
+ * Nothing is matched automatically; only request IDs chosen by this driver
+ * are committed. Capacity is enforced atomically; over-capacity => 409 NO_SEATS.
  */
 driverRouter.post("/pools", async (req, res, next) => {
   try {
@@ -184,6 +249,20 @@ driverRouter.post("/pools", async (req, res, next) => {
       throw errors.conflict("VEHICLE_OFFLINE", "Go online before accepting rides");
     }
 
+    const existingActivePool = await prisma.pool.findFirst({
+      where: {
+        vehicleId: vehicle.id,
+        status: { in: ["REQUESTED", "MATCHED", "DRIVER_ARRIVED", "STARTED"] },
+      },
+      select: { id: true },
+    });
+    if (existingActivePool) {
+      throw errors.conflict(
+        "ACTIVE_POOL_EXISTS",
+        `Add compatible requests to active pool #${existingActivePool.id} instead`
+      );
+    }
+
     const requests = await prisma.rideRequest.findMany({
       where: { id: { in: requestIds }, status: "REQUESTED" },
       include: { pickupArea: true, destArea: true },
@@ -195,31 +274,33 @@ driverRouter.post("/pools", async (req, res, next) => {
       );
     }
 
-    // same-corridor rule must hold for everyone in this pool
-    const head = requests[0];
-    for (const r of requests.slice(1)) {
-      const ok = areCompatible(
-        {
-          pickup: { lat: head.pickupArea.lat, lng: head.pickupArea.lng },
-          dest: { lat: head.destArea.lat, lng: head.destArea.lng },
-        },
-        {
-          pickup: { lat: r.pickupArea.lat, lng: r.pickupArea.lng },
-          dest: { lat: r.destArea.lat, lng: r.destArea.lng },
-        }
+    // Every selected trip must fit the same corridor. The service remains
+    // authoritative; the frontend's compatibility hints never replace it.
+    if (!requestsShareCorridor(requests)) {
+      throw errors.conflict(
+        "INCOMPATIBLE",
+        "These trips cannot share a Tesla (matching rule)"
       );
-      if (!ok) {
-        throw errors.conflict(
-          "INCOMPATIBLE",
-          "These trips cannot share a Tesla (matching rule)"
-        );
-      }
     }
 
     const totalSeats = requests.reduce((s, r) => s + r.seatsRequested, 0);
     if (totalSeats > vehicle.capacity) throw errors.noSeats();
 
     const pool = await prisma.$transaction(async (tx) => {
+      const activeInsideTransaction = await tx.pool.findFirst({
+        where: {
+          vehicleId: vehicle.id,
+          status: { in: ["REQUESTED", "MATCHED", "DRIVER_ARRIVED", "STARTED"] },
+        },
+        select: { id: true },
+      });
+      if (activeInsideTransaction) {
+        throw errors.conflict(
+          "ACTIVE_POOL_EXISTS",
+          `Add compatible requests to active pool #${activeInsideTransaction.id} instead`
+        );
+      }
+
       const p = await tx.pool.create({
         data: {
           vehicleId: vehicle.id,
@@ -253,14 +334,14 @@ driverRouter.post("/pools", async (req, res, next) => {
           actorId: req.user!.id,
           fromStatus: "NONE",
           toStatus: "MATCHED",
-          note: `Pool opened with ${requests.length} request(s)`,
+          note: `Driver manually assigned ${requests.length} passenger request(s)`,
         },
       });
 
+      await recalcFaresTx(tx, p.id);
       return p;
     });
 
-    await recalcFares(pool.id);
     const updatedPool = await prisma.pool.findUnique({
       where: { id: pool.id },
     });
@@ -298,26 +379,140 @@ driverRouter.get("/pools", async (req, res, next) => {
   }
 });
 
-/** Lifecycle helper - guarded transition + mirrored status + audit event. */
-async function transition(req: any, res: any, next: any, to: string) {
+/**
+ * POST /driver/pools/:id/requests - add compatible waiting requests to the
+ * driver's matched pool. Capacity, corridor, status, and membership writes
+ * commit together so a failed add never consumes a seat.
+ */
+driverRouter.post("/pools/:id/requests", async (req, res, next) => {
   try {
-    const pool = await guardPool(Number(req.params.id));
+    const poolId = Number(req.params.id);
+    const { requestIds } = addRequestsSchema.parse(req.body);
+    const pool = await guardPool(poolId);
     assertDriverOwns(pool.vehicle.driverId, req.user!.id);
-    assertPoolTransition(pool.status, to);
+    if (!pool.vehicle.isOnline) {
+      throw errors.conflict("VEHICLE_OFFLINE", "Go online before adding passengers");
+    }
+    if (pool.status !== "MATCHED") {
+      throw errors.conflict(
+        "POOL_CLOSED",
+        "Passengers can only be added while the pool is matched"
+      );
+    }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.pool.update({
-        where: { id: pool.id },
+    const [members, requests] = await Promise.all([
+      prisma.poolMember.findMany({
+        where: { poolId },
+        include: { request: { include: { pickupArea: true, destArea: true } } },
+      }),
+      prisma.rideRequest.findMany({
+        where: { id: { in: requestIds }, status: "REQUESTED" },
+        include: { pickupArea: true, destArea: true },
+      }),
+    ]);
+
+    if (requests.length !== requestIds.length) {
+      throw errors.conflict(
+        "REQUEST_UNAVAILABLE",
+        "Some requests are no longer available"
+      );
+    }
+    if (!requestsShareCorridor([...members.map((member) => member.request), ...requests])) {
+      throw errors.conflict(
+        "INCOMPATIBLE",
+        "One or more trips do not fit this pool's corridor"
+      );
+    }
+
+    const requestedSeats = requests.reduce(
+      (sum, request) => sum + request.seatsRequested,
+      0
+    );
+    if (pool.seatsTaken + requestedSeats > pool.capacity) {
+      throw errors.noSeats(
+        `Only ${Math.max(0, pool.capacity - pool.seatsTaken)} seat(s) remain in this pool`
+      );
+    }
+
+    const updatedPoolId = await prisma.$transaction(async (tx) => {
+      for (const request of requests) {
+        const claimed = await claimSeatsTx(tx, poolId, request.seatsRequested);
+        if (!claimed) {
+          throw errors.noSeats(
+            "The pool changed while requests were being added. No seats were claimed."
+          );
+        }
+        await tx.poolMember.create({
+          data: {
+            poolId,
+            requestId: request.id,
+            seats: request.seatsRequested,
+            fareTaka: 0,
+          },
+        });
+        await tx.rideRequest.update({
+          where: { id: request.id },
+          data: { status: "MATCHED" },
+        });
+      }
+
+      await tx.rideEvent.create({
         data: {
-          status: to as any,
+          poolId,
+          actorId: req.user!.id,
+          fromStatus: "MATCHED",
+          toStatus: "MATCHED",
+          note: `Driver manually added ${requests.length} compatible passenger request(s)`,
+        },
+      });
+      await recalcFaresTx(tx, poolId);
+      return poolId;
+    });
+
+    const updatedPool = await prisma.pool.findUnique({
+      where: { id: updatedPoolId },
+    });
+    res.status(201).json({ pool: updatedPool });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Lifecycle helper - guarded transition + mirrored status + audit event. */
+async function transition(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  to: Exclude<PoolStatus, "REQUESTED">
+) {
+  try {
+    const poolId = Number(req.params.id);
+    const result = await prisma.$transaction(async (tx) => {
+      const pool = await tx.pool.findUnique({
+        where: { id: poolId },
+        include: { vehicle: true },
+      });
+      if (!pool) throw errors.notFound("Pool");
+      assertDriverOwns(pool.vehicle.driverId, req.user!.id);
+      assertPoolTransition(pool.status, to);
+
+      // Make the source state part of the write. If another lifecycle request
+      // moved the pool first, this update loses the race and returns 409.
+      const updated = await tx.pool.updateMany({
+        where: { id: pool.id, status: pool.status },
+        data: {
+          status: to,
           ...(to === "STARTED" ? { startedAt: new Date() } : {}),
           ...(to === "COMPLETED" ? { completedAt: new Date() } : {}),
         },
       });
-      // mirror status to every member's ride so passengers track their own status
+      if (updated.count !== 1) {
+        throw errors.invalidTransition(pool.status, to);
+      }
+
       await tx.rideRequest.updateMany({
         where: { poolMembers: { some: { poolId: pool.id } } },
-        data: { status: to as any },
+        data: { status: to as RideStatus },
       });
       await tx.rideEvent.create({
         data: {
@@ -327,10 +522,10 @@ async function transition(req: any, res: any, next: any, to: string) {
           toStatus: to,
         },
       });
+      return { id: pool.id, status: to };
     });
 
-    await recalcFares(pool.id);
-    res.json({ poolId: pool.id, status: to });
+    res.json({ poolId: result.id, status: result.status });
   } catch (e) {
     next(e);
   }
@@ -350,106 +545,209 @@ driverRouter.post("/pools/:id/cancel", (req, res, next) =>
 );
 
 // ---------------------------------------------------------------------------
-// Shared pool endpoints (membership) - both roles allowed
+// Shared pool details. Passenger self-service discovery and join routes do not
+// exist; only an explicitly assigned passenger or the owning driver can read it.
 // ---------------------------------------------------------------------------
 
 export const membershipRouter = Router();
 membershipRouter.use(requireAuth);
 
 /**
- * POST /pools/:id/join - a PASSENGER joins an open pool with their own request.
- * Same atomic claim as the driver path.
+ * GET /pools/open - privacy-safe open-pool discovery for a passenger.
+ * The response contains capacity and route corridor hints, never other riders'
+ * identities, fares, or private request records. A passenger must first create
+ * a REQUESTED ride; the compatible request IDs are their own join handles.
  */
-membershipRouter.post("/pools/:id/join", async (req, res, next) => {
+membershipRouter.get("/pools/open", requireRole("passenger"), async (req, res, next) => {
   try {
-    const { requestId } = joinSchema.parse(req.body);
-    const poolId = Number(req.params.id);
-    const pool = await guardPool(poolId);
-
-    const request = await prisma.rideRequest.findUnique({
-      where: { id: requestId },
-      include: { pickupArea: true, destArea: true },
-    });
-    if (!request) throw errors.notFound("Ride");
-    if (request.passengerId !== req.user!.id) {
-      throw errors.forbidden("You can only join with your own request");
-    }
-    if (request.status !== "REQUESTED") {
-      throw errors.conflict("REQUEST_UNAVAILABLE", "Ride is not joinable anymore");
-    }
-    if (pool.status !== "REQUESTED" && pool.status !== "MATCHED") {
-      throw errors.conflict("POOL_CLOSED", "Pool is not accepting passengers");
-    }
-
-    // matching rule against an existing member
-    const existing = await prisma.poolMember.findFirst({
-      where: { poolId },
-      include: { request: { include: { pickupArea: true, destArea: true } } },
-    });
-    if (existing) {
-      const ok = areCompatible(
-        {
-          pickup: {
-            lat: existing.request.pickupArea.lat,
-            lng: existing.request.pickupArea.lng,
-          },
-          dest: {
-            lat: existing.request.destArea.lat,
-            lng: existing.request.destArea.lng,
+    const [ownRequests, pools] = await Promise.all([
+      prisma.rideRequest.findMany({
+        where: { passengerId: req.user!.id, status: "REQUESTED" },
+        include: { pickupArea: true, destArea: true },
+        orderBy: { createdAt: "asc" },
+      }),
+      prisma.pool.findMany({
+        where: {
+          status: { in: ["REQUESTED", "MATCHED"] },
+          vehicle: { isOnline: true },
+        },
+        include: {
+          vehicle: true,
+          members: {
+            include: {
+              request: { include: { pickupArea: true, destArea: true } },
+            },
           },
         },
-        {
-          pickup: { lat: request.pickupArea.lat, lng: request.pickupArea.lng },
-          dest: { lat: request.destArea.lat, lng: request.destArea.lng },
-        }
-      );
-      if (!ok) {
-        throw errors.conflict("INCOMPATIBLE", "Trips do not overlap enough to pool");
-      }
-    }
-
-    // ⭐ atomic - the Nusrat/Shirin last-seat race resolves right here
-    const ok = await claimSeats(poolId, request.seatsRequested);
-    if (!ok) throw errors.noSeats();
-
-    await prisma.$transaction([
-      prisma.poolMember.create({
-        data: {
-          poolId,
-          requestId,
-          seats: request.seatsRequested,
-          fareTaka: 0,
-        },
-      }),
-      prisma.rideRequest.update({
-        where: { id: requestId },
-        data: { status: "MATCHED" },
-      }),
-      prisma.rideEvent.create({
-        data: {
-          poolId,
-          actorId: req.user!.id,
-          fromStatus: "REQUESTED",
-          toStatus: "MATCHED",
-          note: "Passenger joined pool",
-        },
+        orderBy: { createdAt: "asc" },
       }),
     ]);
 
-    await recalcFares(poolId);
+    const summaries = pools.map((pool) => {
+      const existingRoutes = pool.members.map((member) => member.request);
+      const remainingSeats = Math.max(0, pool.capacity - pool.seatsTaken);
+      const compatibleRequestIds = ownRequests
+        .filter((request) =>
+          existingRoutes.length === 0
+            ? true
+            : requestsShareCorridor([...existingRoutes, request]),
+        )
+        .map((request) => request.id);
+      const joinableRequestIds = ownRequests
+        .filter(
+          (request) =>
+            compatibleRequestIds.includes(request.id) &&
+            request.seatsRequested <= remainingSeats,
+        )
+        .map((request) => request.id);
+      const firstRoute = pool.members[0]?.request;
 
-    const fresh = await prisma.pool.findUnique({ where: { id: poolId } });
-    res.status(201).json({ ok: true, poolId, seatsTaken: fresh?.seatsTaken });
+      return {
+        id: pool.id,
+        status: pool.status,
+        capacity: pool.capacity,
+        seatsTaken: pool.seatsTaken,
+        remainingSeats,
+        capacityState:
+          remainingSeats === 0 ? "full" : remainingSeats === 1 ? "last-seat" : "available",
+        vehicle: {
+          name: pool.vehicle.name,
+          plate: pool.vehicle.plate,
+        },
+        route: firstRoute
+          ? {
+              pickup: firstRoute.pickupArea.name,
+              destination: firstRoute.destArea.name,
+            }
+          : null,
+        memberCount: pool.members.length,
+        compatibleRequestIds,
+        joinableRequestIds,
+      };
+    });
+
+    res.set("Cache-Control", "private, no-store");
+    res.json({ pools: summaries, refreshedAt: new Date().toISOString() });
   } catch (e) {
     next(e);
   }
 });
 
-/** GET /pools/:id - members & seats (driver or member only) */
+/**
+ * POST /pools/:id/join - passenger joins a compatible open pool with their own
+ * REQUESTED ride. Capacity claim, membership, status mirror, audit event, and
+ * fare recalculation all commit in one transaction. A final-seat race therefore
+ * returns one success and one clean 409 NO_SEATS with no orphaned membership.
+ */
+membershipRouter.post(
+  "/pools/:id/join",
+  requireRole("passenger"),
+  async (req, res, next) => {
+    try {
+      const poolId = Number(req.params.id);
+      const { requestId } = joinSchema.parse(req.body);
+
+      const result = await prisma.$transaction(async (tx) => {
+        const pool = await tx.pool.findUnique({
+          where: { id: poolId },
+          include: { vehicle: true },
+        });
+        if (!pool) throw errors.notFound("Pool");
+        if (!pool.vehicle.isOnline) {
+          throw errors.conflict("VEHICLE_OFFLINE", "This driver is not accepting passengers");
+        }
+        if (pool.status !== "REQUESTED" && pool.status !== "MATCHED") {
+          throw errors.conflict("POOL_CLOSED", "This pool is not accepting passengers");
+        }
+
+        const request = await tx.rideRequest.findUnique({
+          where: { id: requestId },
+          include: { pickupArea: true, destArea: true },
+        });
+        if (!request) throw errors.notFound("Ride");
+        if (request.passengerId !== req.user!.id) {
+          throw errors.forbidden("You can only join with your own request");
+        }
+        if (request.status !== "REQUESTED") {
+          throw errors.conflict("REQUEST_UNAVAILABLE", "This ride is no longer joinable");
+        }
+
+        const members = await tx.poolMember.findMany({
+          where: { poolId },
+          include: { request: { include: { pickupArea: true, destArea: true } } },
+        });
+        if (members.length > 0 && !requestsShareCorridor([...members.map((member) => member.request), request])) {
+          throw errors.conflict(
+            "INCOMPATIBLE",
+            "This ride does not share the pool's route corridor",
+          );
+        }
+
+        const remainingSeats = Math.max(0, pool.capacity - pool.seatsTaken);
+        if (request.seatsRequested > remainingSeats) {
+          throw errors.noSeats(
+            remainingSeats === 0
+              ? "This pool is full; the last seat is already held"
+              : `Only ${remainingSeats} seat(s) remain in this pool`,
+          );
+        }
+
+        const claimed = await claimSeatsTx(tx, poolId, request.seatsRequested);
+        if (!claimed) {
+          const current = await tx.pool.findUnique({ where: { id: poolId } });
+          if (current && (current.status === "DRIVER_ARRIVED" || current.status === "STARTED" || current.status === "COMPLETED" || current.status === "CANCELLED")) {
+            throw errors.conflict("POOL_CLOSED", "This pool closed while the seat was being claimed");
+          }
+          throw errors.noSeats("The last seat was claimed by another passenger");
+        }
+
+        await tx.poolMember.create({
+          data: {
+            poolId,
+            requestId,
+            seats: request.seatsRequested,
+            fareTaka: 0,
+          },
+        });
+        const updatedRequest = await tx.rideRequest.updateMany({
+          where: { id: requestId, status: "REQUESTED" },
+          data: { status: "MATCHED" },
+        });
+        if (updatedRequest.count !== 1) {
+          throw errors.conflict("REQUEST_UNAVAILABLE", "This ride is no longer joinable");
+        }
+
+        await tx.rideEvent.create({
+          data: {
+            poolId,
+            actorId: req.user!.id,
+            fromStatus: "REQUESTED",
+            toStatus: "MATCHED",
+            note: "Passenger joined the open pool",
+          },
+        });
+        await recalcFaresTx(tx, poolId);
+
+        const fresh = await tx.pool.findUnique({ where: { id: poolId } });
+        return { poolId, seatsTaken: fresh?.seatsTaken ?? 0 };
+      });
+
+      res.status(201).json({ ok: true, ...result });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** GET /pools/:id - members & seats (driver or assigned member only) */
 membershipRouter.get("/pools/:id", async (req, res, next) => {
   try {
+    const poolId = Number(req.params.id);
+    if (!Number.isInteger(poolId) || poolId <= 0) {
+      throw errors.notFound("Pool");
+    }
     const pool = await prisma.pool.findUnique({
-      where: { id: Number(req.params.id) },
+      where: { id: poolId },
       include: {
         vehicle: { include: { driver: { select: { id: true, name: true } } } },
         members: {
@@ -494,6 +792,9 @@ membershipRouter.get("/pools/:id", async (req, res, next) => {
         status: pool.status,
         capacity: pool.capacity,
         seatsTaken: pool.seatsTaken,
+        createdAt: pool.createdAt,
+        startedAt: pool.startedAt,
+        completedAt: pool.completedAt,
         vehicle: pool.vehicle.name,
         driver: pool.vehicle.driver,
         members,
@@ -504,5 +805,3 @@ membershipRouter.get("/pools/:id", async (req, res, next) => {
     next(e);
   }
 });
-
-export { releaseSeats, claimSeats, recalcFares };

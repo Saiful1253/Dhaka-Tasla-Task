@@ -1,13 +1,29 @@
 import { Router } from "express";
+import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireRole } from "../middleware/auth";
+import { config } from "../config";
 import { errors } from "../lib/errors";
 import { computeFare } from "../lib/fare";
-import { areCompatible } from "../lib/matching";
 import { assertCancellable } from "../lib/transitions";
 
 export const rideRouter = Router();
+
+/** Keep the live board useful without turning it into an unbounded directory. */
+const ACTIVITY_LIMIT = 20;
+
+/**
+ * A display token only. HMAC keeps a sequential request id from being exposed
+ * or trivially guessed while remaining stable for a given deployment secret.
+ */
+function activityIdFor(requestId: number): string {
+  const digest = createHmac("sha256", config.jwtSecret)
+    .update(`ride-request:${requestId}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `act_${digest}`;
+}
 
 /** GET /areas - the predefined Dhaka zone list (no map API, PRD section 4) */
 export const areaRouter = Router();
@@ -52,6 +68,12 @@ rideRouter.get("/estimate", async (req, res, next) => {
     if (pickupAreaId === destAreaId) {
       throw errors.badRequest("Pickup and destination must differ");
     }
+    if (!Number.isInteger(seats) || seats < 1 || seats > 3) {
+      throw errors.badRequest("seats must be an integer from 1 to 3");
+    }
+    if (!Number.isInteger(poolSize) || poolSize < 1 || poolSize > 3) {
+      throw errors.badRequest("poolSize must be an integer from 1 to 3");
+    }
 
     const ends = await loadEnds(pickupAreaId, destAreaId);
     const fare = computeFare({ ...ends, poolSize });
@@ -70,9 +92,56 @@ rideRouter.get("/estimate", async (req, res, next) => {
   }
 });
 
-rideRouter.use(requireAuth);
+rideRouter.use(requireAuth, requireRole("passenger"));
 
-/** POST /rides - passenger requests a ride (status: REQUESTED) */
+/**
+ * GET /rides/activity - a deliberately narrow, privacy-safe view of other
+ * passengers' live REQUESTED rides. The current passenger is excluded, and the
+ * response never selects identity, fare, status, pool, or history fields.
+ */
+rideRouter.get("/activity", async (req, res, next) => {
+  try {
+    const where = {
+      status: "REQUESTED" as const,
+      passengerId: { not: req.user!.id },
+    };
+    const [activeCount, rows] = await Promise.all([
+      prisma.rideRequest.count({ where }),
+      prisma.rideRequest.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: ACTIVITY_LIMIT,
+        select: {
+          id: true,
+          seatsRequested: true,
+          createdAt: true,
+          pickupArea: { select: { name: true } },
+          destArea: { select: { name: true } },
+        },
+      }),
+    ]);
+
+    res.set("Cache-Control", "private, no-store");
+    res.json({
+      activeCount,
+      requests: rows.map((row) => ({
+        activityId: activityIdFor(row.id),
+        pickup: row.pickupArea.name,
+        destination: row.destArea.name,
+        seats: row.seatsRequested,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      refreshedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * POST /rides - passenger creates an unassigned request (status: REQUESTED).
+ * This does not book a pool; only a later driver-owned mutation may assign it.
+ */
 rideRouter.post("/", async (req, res, next) => {
   try {
     const body = requestSchema.parse(req.body);
@@ -101,10 +170,20 @@ rideRouter.post("/", async (req, res, next) => {
           },
         },
       },
-      include: { fare: true, pickupArea: true, destArea: true },
+      include: {
+        fare: true,
+        pickupArea: true,
+        destArea: true,
+        poolMembers: { include: { pool: true } },
+      },
     });
+    const { poolMembers, ...ride } = request;
 
-    res.status(201).json({ ride: request });
+    // Keep every ride representation structurally identical: callers receive
+    // `pool: null` immediately after creation instead of an unsound undefined.
+    res.status(201).json({
+      ride: { ...ride, pool: poolMembers[0]?.pool ?? null },
+    });
   } catch (e) {
     next(e);
   }
@@ -123,53 +202,14 @@ rideRouter.get("/", async (req, res, next) => {
         poolMembers: { include: { pool: true } },
       },
     });
-    res.json({ rides });
-  } catch (e) {
-    next(e);
-  }
-});
-
-/** GET /rides/:id/matches - compatible REQUESTED rides (the matching rule) */
-rideRouter.get("/:id/matches", async (req, res, next) => {
-  try {
-    const id = Number(req.params.id);
-    const mine = await prisma.rideRequest.findUnique({
-      where: { id },
-      include: { pickupArea: true, destArea: true },
+    // The client contract exposes one membership (`pool`) rather than the raw
+    // join-table array. It still contains no passenger other than the owner.
+    res.json({
+      rides: rides.map(({ poolMembers, ...ride }) => ({
+        ...ride,
+        pool: poolMembers[0]?.pool ?? null,
+      })),
     });
-    if (!mine) throw errors.notFound("Ride");
-    if (mine.passengerId !== req.user!.id) throw errors.forbidden();
-
-    const mineEnds = {
-      pickup: { lat: mine.pickupArea.lat, lng: mine.pickupArea.lng },
-      dest: { lat: mine.destArea.lat, lng: mine.destArea.lng },
-    };
-
-    const others = await prisma.rideRequest.findMany({
-      where: { status: "REQUESTED", id: { not: mine.id } },
-      include: {
-        passenger: { select: { id: true, name: true } },
-        pickupArea: true,
-        destArea: true,
-      },
-    });
-
-    const matches = others
-      .filter((o) =>
-        areCompatible(mineEnds, {
-          pickup: { lat: o.pickupArea.lat, lng: o.pickupArea.lng },
-          dest: { lat: o.destArea.lat, lng: o.destArea.lng },
-        })
-      )
-      .map((o) => ({
-        id: o.id,
-        passenger: o.passenger,
-        pickup: o.pickupArea.name,
-        dest: o.destArea.name,
-        seats: o.seatsRequested,
-      }));
-
-    res.json({ matches });
   } catch (e) {
     next(e);
   }
@@ -209,27 +249,44 @@ rideRouter.get("/:id", async (req, res, next) => {
 rideRouter.delete("/:id", async (req, res, next) => {
   try {
     const id = Number(req.params.id);
-    const ride = await prisma.rideRequest.findUnique({
-      where: { id },
-      include: { poolMembers: true },
-    });
+    const ride = await prisma.rideRequest.findUnique({ where: { id } });
     if (!ride) throw errors.notFound("Ride");
     if (ride.passengerId !== req.user!.id) throw errors.forbidden();
 
     assertCancellable(ride.status);
 
     await prisma.$transaction(async (tx) => {
-      const member = ride.poolMembers[0];
+      // Re-check the cancellable state in the write transaction. A driver can
+      // advance the pool concurrently; if that won the race, the update count
+      // is zero and the entire transaction rolls back without releasing a seat.
+      const cancelled = await tx.rideRequest.updateMany({
+        where: { id, status: { in: ["REQUESTED", "MATCHED"] } },
+        data: { status: "CANCELLED" },
+      });
+      if (cancelled.count !== 1) {
+        const current = await tx.rideRequest.findUnique({ where: { id } });
+        throw errors.conflict(
+          "CANCEL_NOT_ALLOWED",
+          `Ride cannot be cancelled while ${current?.status ?? "UNKNOWN"}`
+        );
+      }
+
+      const member = await tx.poolMember.findUnique({ where: { requestId: id } });
       if (member) {
         await tx.$executeRaw`
           UPDATE pools SET seats_taken = GREATEST(seats_taken - ${member.seats}, 0)
           WHERE id = ${member.poolId}`;
         await tx.poolMember.delete({ where: { id: member.id } });
+        await tx.rideEvent.create({
+          data: {
+            poolId: member.poolId,
+            actorId: req.user!.id,
+            fromStatus: ride.status,
+            toStatus: "CANCELLED",
+            note: "Passenger cancelled and released their seats",
+          },
+        });
       }
-      await tx.rideRequest.update({
-        where: { id },
-        data: { status: "CANCELLED" },
-      });
     });
 
     res.json({ ok: true, id, status: "CANCELLED" });

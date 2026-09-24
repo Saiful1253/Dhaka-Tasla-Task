@@ -21,12 +21,11 @@ export interface TripEnds {
 export function areCompatible(a: TripEnds, b: TripEnds): boolean {
   const { pickupRadiusKm, destRadiusKm } = config.matching;
 
-  // (a) identical pickup point (same area center)
+  // (a) identical pickup point (same predefined area center). This deliberately
+  // keeps the Banani pickup story compatible even when final stops diverge.
   if (
     a.pickup.lat === b.pickup.lat &&
-    a.pickup.lng === b.pickup.lng &&
-    a.dest.lat === b.dest.lat &&
-    a.dest.lng === b.dest.lng
+    a.pickup.lng === b.pickup.lng
   ) {
     return true;
   }

@@ -8,12 +8,12 @@ import { signToken } from "../middleware/auth";
 export const authRouter = Router();
 
 const credentialsSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().email(),
   password: z.string().min(6),
 });
 
 const signupSchema = credentialsSchema.extend({
-  name: z.string().min(1).max(80),
+  name: z.string().trim().min(1).max(80),
   role: z.enum(["passenger", "driver"]),
 });
 
@@ -21,19 +21,39 @@ const signupSchema = credentialsSchema.extend({
 authRouter.post("/signup", async (req, res, next) => {
   try {
     const body = signupSchema.parse(req.body);
+    const normalizedEmail = body.email.trim().toLowerCase();
 
     const existing = await prisma.user.findUnique({
-      where: { email: body.email.toLowerCase() },
+      where: { email: normalizedEmail },
     });
     if (existing) throw errors.conflict("EMAIL_TAKEN", "Email already registered");
 
-    const user = await prisma.user.create({
-      data: {
-        name: body.name,
-        email: body.email.toLowerCase(),
-        passwordHash: await bcrypt.hash(body.password, 10),
-        role: body.role,
-      },
+    const passwordHash = await bcrypt.hash(body.password, 10);
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          name: body.name.trim(),
+          email: normalizedEmail,
+          passwordHash,
+          role: body.role,
+        },
+      });
+
+      // A driver account is only useful when it owns a vehicle. Provision the
+      // same capacity-3 default in the same transaction as the user so signup
+      // can never leave a newly registered driver with an unusable dashboard.
+      if (created.role === "driver") {
+        await tx.vehicle.create({
+          data: {
+            driverId: created.id,
+            name: `${created.name.split(/\s+/)[0]}'s Tesla`,
+            capacity: 3,
+            isOnline: false,
+          },
+        });
+      }
+
+      return created;
     });
 
     res.status(201).json({
@@ -49,9 +69,10 @@ authRouter.post("/signup", async (req, res, next) => {
 authRouter.post("/login", async (req, res, next) => {
   try {
     const body = credentialsSchema.parse(req.body);
+    const normalizedEmail = body.email.trim().toLowerCase();
 
     const user = await prisma.user.findUnique({
-      where: { email: body.email.toLowerCase() },
+      where: { email: normalizedEmail },
     });
     if (!user) throw errors.invalidCredentials();
 

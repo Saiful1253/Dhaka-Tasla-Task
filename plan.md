@@ -319,7 +319,7 @@ payments(id, fare_id, method[cash|teslapay], status)                    -- simul
 - [x] `backend`: Express + Zod + Prisma init + error-handling middleware + request logging (pino/morgan)
 - [x] `.env.example` (DB_URL, JWT_SECRET, PORT…) — **never real values**
 - [x] `docker-compose.yml` v1: `postgres` (with volume + healthcheck) + `api` (dev), `db:migrate` + `seed` on start
-- [ ] Verify: `docker compose up` → healthy  *(BLOCKED: WSL not installed — needs admin)*
+- [x] Verify: `docker compose up` → healthy (DB, API, migrations, seed)
 - Commits: `chore(scaffold)`, `build(docker): add compose with postgres and healthcheck`
 - **Branch:** do this on `master` (project setup) — feature work starts next hour
 
@@ -341,18 +341,18 @@ payments(id, fare_id, method[cash|teslapay], status)                    -- simul
 
 ## ⏱ 14:00 – 16:30 · Hours 5–6.5: `feature/tesla-pooling` ⭐ (the core)
 - [x] `POST /rides` → create `ride_request` (status `REQUESTED`)
-- [x] **Matching rule implementation** (documented fn): find *online* vehicles with compatible corridor + free seats
-- [x] `POST /pools/:id/join` → **ATOMIC seat claim**:
+- [x] **Compatibility validation** (documented fn): validate the driver's manually selected requests against corridor + free seats; never auto-assign
+- [x] Driver assignment endpoint → **ATOMIC seat claim**:
   ```sql
   BEGIN;
   UPDATE pools SET seats_taken = seats_taken + $n
-   WHERE id = $1 AND seats_taken + $n <= capacity AND status = 'OPEN'
+   WHERE id = $1 AND seats_taken + $n <= capacity AND status = 'MATCHED'
    RETURNING *;
   -- 0 rows ⇒ 409 "no seats available"
   COMMIT;
   ```
   (Prisma: `$transaction` + conditional update, or raw SQL — explain in README)
-- [x] Driver: `GET /driver/requests` (relevant only), `POST /pools` (open pool), `POST /pools/:id/accept`
+- [x] Driver: `GET /driver/requests` (manual board), `POST /driver/pools` (assign selected requests), `POST /driver/pools/:id/requests` (add selected passengers)
 - [x] Lifecycle: `POST /pools/:id/arrived | start | complete` with **server-side transition guard** (invalid ⇒ 409/422)
 - [x] Authorization: passengers only see **their own** fare/status/membership (`pool_members` scoping middleware)
 - [x] Cancellation: only `REQUESTED`/`MATCHED`; releases seats atomically
@@ -377,12 +377,12 @@ payments(id, fare_id, method[cash|teslapay], status)                    -- simul
 ## ⏱ 17:30 – 18:30 · Hour 8: API docs + Day 1 wrap
 - [x] README: API overview table (method, path, auth, description)
 - [x] Commit all; merge to `master`
-- [ ] Day-1 review: re-run `docker compose up --build` from scratch *(BLOCKED: WSL)*
+- [x] Day-1 review: full `docker compose up --build` verified with DB/API/frontend healthchecks and idempotent seed
 
 **🎯 Day 1 exit criteria**
 - [x] `docker compose up` → DB + API + migrations + seeds healthy
 - [x] All ride/pool/fare/auth endpoints working with guards
-- [x] 6 tests passing (incl. concurrency)
+- [x] 46 tests passing in a disposable PostgreSQL stack (incl. concurrency and Day 2 contracts)
 - [x] ERD + architecture in README, assumptions documented
 - [x] Feature branches merged into `master` with clean history
 
@@ -390,45 +390,54 @@ payments(id, fare_id, method[cash|teslapay], status)                    -- simul
 
 # DAY 2 — Frontend + Tests Polish + Docs + Git Release + Video
 
+> **Current status:** core Day 2 implementation is complete locally. Passenger and driver flows, privacy-safe live activity, manual driver assignment plus passenger open-pool joining, the last-seat rejection edge case, frontend Docker image, disposable integration-test stack, screenshots, and README documentation are present. Public deployment, release branches/tag, and the six-minute video remain honest TODOs.
+
 ## ⏱ 09:00 – 11:30 · Hours 9–10.5: `feature/passenger-ui`
-- [ ] Pages: Login/Signup → Request Ride (pickup/dest/seats) → **Fare estimate card** → Live status → History
-- [ ] Status tracking with clear states; polling every ~5s (no need for websockets)
-- [ ] **Loading / error / empty states** for every async view (explicitly graded)
-- [ ] Cancel button only when state allows (mirror backend rule, don't invent rules)
-- [ ] Fare shown only for *the current user*
+- [x] Pages: Login/Signup → Request Ride (pickup/dest/seats) → **Fare estimate card** → Live status → History
+- [x] Status tracking with clear states; polling every ~5s (no WebSocket dependency)
+- [x] **Loading / error / empty states** for every async view
+- [x] Cancel button only in `REQUESTED` / `MATCHED`; backend remains authoritative
+- [x] Fare shown only for the current passenger
+- [x] Privacy-safe live booking activity shows anonymous route/seat hints without names, emails, fares, or IDs
+- [x] Passenger open-pool discovery and join action use the same atomic capacity guard as manual driver selection; full/late joins return a graceful 409 and remain `REQUESTED`
+- [x] Driver board makes the selected passenger set explicit before the atomic assignment/addition mutation
 - Commits: `feat(ui): add passenger ride request flow`, `feat(ui): add ride status and history views`, `fix(ui): handle loading and error states`
 
 ## ⏱ 11:30 – 13:30 · Hours 11–12: `feature/driver-ui`
-- [ ] Driver login → online/offline toggle → incoming compatible requests → open/accept pool → passengers + seat meter (`2/3 seats`) → arrived → start → complete
-- [ ] Ride history view for driver
-- [ ] Block illegal actions in UI *and* show backend 409s gracefully
+- [x] Driver login → online/offline toggle → waiting passenger feed → manual checkbox selection → assign pool → optionally add selected passengers → roster + seat meter → arrived → start → complete
+- [x] Ride history view for driver
+- [x] Illegal actions blocked in UI and backend 409 errors shown with stable error codes
+- [x] One-active-pool rule enforced before creation, inside the transaction, and by a partial unique database index
 - Commits: `feat(ui): add driver online toggle and request feed`, `feat(ui): add pool lifecycle controls`
 
 ## ⏱ 13:30 – 14:30 · Lunch + buffer
 
 ## ⏱ 14:30 – 15:30 · Hour 13: End-to-end pass + edge case
-- [ ] Manual walkthrough as the story: Nusrat books → Rafiq pools → Shirin takes last seat → **Shirin #2 attempt gets rejected (edge case for video)** → Jashim drives → complete → history
-- [ ] Fix anything broken; screenshots/GIFs for README **as you go**
+- [x] Story walkthrough: Nusrat/Rafiq request rides → Jashim opens their pool and assigns Shirin the final seat → a later waiting request receives a graceful full-capacity rejection and stays `REQUESTED` → Jashim advances the lifecycle → history remains visible
+- [x] Desktop/mobile screenshots collected in `docs/screenshots/` and linked from `README.md`
+- [x] Frontend smoke check covers page render, API rewrite, driver board, passenger history, privacy-safe activity, open-pool discovery, and join capacity
+- [x] Real fixes made during verification: passenger-role guards, driver vehicle provisioning, active-pool handling, atomic membership/fare writes, input normalization, and stale test-database protection
 - Commits: `fix(...)` as needed (real fix commits = good history)
 
 ## ⏱ 15:30 – 16:30 · Hour 14: Deployment
-- [ ] Try free tiers: **Vercel** (frontend) + **Railway/Render/Fly** (API + managed Postgres free tier)
-- [ ] If blocked by free-tier limits → document the constraint in README + provide reproducible Docker deploy (PRD explicitly allows this)
-- [ ] Add deployment URL to README
-- Commits: `docs(deploy): add deployment instructions`, `chore(ci)` if time
+- [x] Reproducible local deployment: `docker compose up --build` includes PostgreSQL, API, and frontend healthchecks
+- [x] Vercel-compatible frontend instructions + API/PostgreSQL deployment notes documented
+- [ ] Add a verified public deployment URL (requires deployment credentials/account; not fabricated)
+- Commits: `build(docker): add full-stack frontend service`, `docs(deploy): document deployment options`
 
-## ⏱ 16:30 – 17:30 · Hour 15: README completion (do NOT leave this last)
+## ⏱ 16:30 – 17:30 · Hour 15: README completion
 Must have all of these:
-- [ ] Summary, problem statement, features, **screenshots/GIFs**
-- [ ] Architecture diagram + **ERD**
-- [ ] Tech stack, project structure, prerequisites
-- [ ] `.env.example` reference (no real secrets)
-- [ ] Local setup / Docker / migration / seed instructions
-- [ ] Run frontend · run backend · run tests · **demo credentials**
-- [ ] Deployment URL, API overview, key decisions & trade-offs, known limitations, next improvements
-- [ ] **AI Usage section**: tools used, one *accepted* suggestion, one *rejected/changed* suggestion + why
+- [x] Summary, problem statement, features, and screenshots
+- [x] Architecture diagram + **ERD**
+- [x] Tech stack, project structure, prerequisites
+- [x] `.env.example` reference (no real secrets)
+- [x] Local setup / Docker / migration / seed instructions
+- [x] Run frontend · run backend · run tests · **demo credentials**
+- [x] API overview, key decisions/trade-offs, known limitations, next improvements
+- [x] Deployment instructions and the constraint that no public URL exists yet
+- [x] **AI Usage section**: tools used, one *accepted* suggestion, one *rejected/changed* suggestion + why
 - [ ] **6-min video link** (placeholder OK until recorded)
-- [ ] Bonus scaling section (short is fine — reasoning > boxes)
+- [x] Bonus scaling section (short is fine — reasoning > boxes)
 - Commits: `docs(readme): ...`
 
 ## ⏱ 17:30 – 18:15 · Hour 16: Git release ritual ⭐ (graded!)
@@ -457,22 +466,22 @@ Script timing:
 - Commit: `docs(readme): add demo video link`
 
 ## ⏱ 19:15 – 19:45 · Hour 18: Final submission check (from PRD §14)
-- [ ] Public repo, working MVP (frontend + backend + DB)
-- [ ] `docker compose up` works from a clean clone
-- [ ] `.env.example` present, **no secrets**
-- [ ] Migrations + seed with story cast
-- [ ] Architecture diagram + ERD
-- [ ] `master` / `pre-release` / `release/v1.0.0` + meaningful history
-- [ ] Tests green, README self-explanatory, deploy link (or documented constraint)
-- [ ] Video link + AI Usage section (+ bonus if attempted)
-- [ ] Re-read §16 "What NOT to Do" — confirm none violated
+- [ ] Public repo with a verified working deployment
+- [x] Full-stack `docker compose up` configuration (DB + API + frontend, migrations, seed, healthchecks)
+- [x] `.env.example` present; no secrets committed
+- [x] Migrations + seed with story cast
+- [x] Architecture diagram + ERD
+- [ ] `master` / `pre-release` / `release/v1.0.0` + `v1.0.0` tag
+- [x] Automated tests and README self-explanatory; deployment constraint documented
+- [ ] Video link (AI Usage section and scaling bonus are complete)
+- [x] Re-read §16 "What NOT to Do" — no map API, queue, secret, or fabricated deployment/video claims
 
 **🎯 Day 2 exit criteria**
 - [x] Two complete user flows working end-to-end
 - [x] Loading/error/empty states present
-- [x] README complete with diagrams, AI usage, video
-- [x] Release branches + tag cut
-- [ ] Rehearse the video once → record → link
+- [x] README complete with diagrams, screenshots, AI usage, deployment notes, and scaling
+- [ ] Six-minute video recorded and linked
+- [ ] Release branches + tag cut
 
 ---
 

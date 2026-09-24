@@ -1,0 +1,33 @@
+name: dhaka-tesla-test
+
+services:
+  db-test:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dhaka_tesla_pool_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dhaka_tesla_pool_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+
+  api-test:
+    build:
+      context: ./backend
+      target: test
+    depends_on:
+      db-test:
+        condition: service_healthy
+    environment:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@db-test:5432/dhaka_tesla_pool_test?schema=public
+      ALLOW_DESTRUCTIVE_DB_TESTS: "true"
+      JWT_SECRET: disposable-test-secret-not-for-production
+      BASE_FARE_TAKA: 50
+      RATE_PER_KM_TAKA: 15
+      POOL_DISCOUNT_PCT: 20
