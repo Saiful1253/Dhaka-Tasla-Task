@@ -29,7 +29,7 @@ async function json(path, options = {}) {
     }
   }
   if (!response.ok) {
-    throw new Error(`${options.method ?? "GET"} ${path} → ${response.status}: ${text}`);
+    throw new Error(`${options.method ?? "GET"} ${path} ΓåÆ ${response.status}: ${text}`);
   }
   return body;
 }
