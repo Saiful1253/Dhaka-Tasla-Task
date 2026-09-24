@@ -13,6 +13,7 @@ import {
   areCompatible,
   areParallelRoutes,
   buildRoutePlan,
+  canBuildContinuation,
 } from "../lib/matching";
 import { haversineKm } from "../lib/geo";
 import { config } from "../config";
@@ -71,16 +72,16 @@ function tripEnds(route: RouteRequest) {
   };
 }
 
-function requestsShareCorridor(routes: RouteRequest[]): boolean {
-  return (
-    buildRoutePlan(
-      routes.map((route) => ({
-        id: route.id,
-        createdAt: route.createdAt,
-        ...tripEnds(route),
-      }))
-    ) !== null
-  );
+function toPlanRoute(route: RouteRequest) {
+  return {
+    id: route.id,
+    createdAt: route.createdAt,
+    ...tripEnds(route),
+  };
+}
+
+function requestsFormRoutePlan(routes: RouteRequest[]): boolean {
+  return buildRoutePlan(routes.map(toPlanRoute)) !== null;
 }
 
 const openPoolSchema = z.object({
@@ -150,7 +151,12 @@ driverRouter.get("/requests", async (req, res, next) => {
       }),
     ]);
 
-    const activeRoutes = activePool?.members.map((member) => member.request) ?? [];
+    const activeRoutes =
+      activePool?.members.map((member) => ({
+        ...member.request,
+        // Pool-member creation time is the dispatch order for this plan.
+        createdAt: member.createdAt,
+      })) ?? [];
     const remainingSeats = activePool
       ? Math.max(0, activePool.capacity - activePool.seatsTaken)
       : vehicle.capacity;
@@ -162,13 +168,20 @@ driverRouter.get("/requests", async (req, res, next) => {
             updatedAt: vehicle.locationUpdatedAt?.toISOString() ?? null,
           }
         : null;
+    const freshDriverLocation =
+      driverLocation &&
+      driverLocation.updatedAt &&
+      Date.now() - new Date(driverLocation.updatedAt).getTime() <=
+        config.matching.locationFreshnessMs
+        ? driverLocation
+        : null;
 
     const distanceToDriver = (pickup: { lat: number; lng: number }) =>
-      driverLocation
+      freshDriverLocation
         ? Number(
             haversineKm(
-              driverLocation.lat,
-              driverLocation.lng,
+              freshDriverLocation.lat,
+              freshDriverLocation.lng,
               pickup.lat,
               pickup.lng
             ).toFixed(2)
@@ -176,15 +189,15 @@ driverRouter.get("/requests", async (req, res, next) => {
         : null;
 
     // The queue is already oldest-first. Pick the first nearby request that
-    // can also fit the active corridor, then group only requests that travel
+    // can also fit the active route plan, then group only requests that travel
     // on the same leg. A chained Uttara -> Mirpur request is suggested after
     // the driver reaches Uttara, rather than being mixed into the first leg.
     const suggestionCandidates =
-      vehicle.isOnline && driverLocation
+      vehicle.isOnline && freshDriverLocation
         ? open.filter((request) => {
             const distance = distanceToDriver(request.pickupArea);
             const fitsActivePool = activePool
-              ? requestsShareCorridor([...activeRoutes, request])
+              ? canBuildContinuation(activeRoutes.map(toPlanRoute), [toPlanRoute(request)])
               : true;
             return (
               distance !== null &&
@@ -207,12 +220,13 @@ driverRouter.get("/requests", async (req, res, next) => {
         );
         if (!sameLeg) continue;
         if (suggestedSeats + request.seatsRequested > remainingSeats) continue;
-        if (
-          activePool &&
-          !requestsShareCorridor([...activeRoutes, ...suggestedGroup, request])
-        ) {
-          continue;
-        }
+        const validCandidate = activePool
+          ? canBuildContinuation(
+              activeRoutes.map(toPlanRoute),
+              [...suggestedGroup, request].map(toPlanRoute)
+            )
+          : requestsFormRoutePlan([...suggestedGroup, request]);
+        if (!validCandidate) continue;
         suggestedGroup.push(request);
         suggestedSeats += request.seatsRequested;
       }
@@ -231,7 +245,7 @@ driverRouter.get("/requests", async (req, res, next) => {
       suggestedRequestIds,
       requests: open.map((r) => {
         const fitsActivePool = activePool
-          ? requestsShareCorridor([...activeRoutes, r])
+          ? canBuildContinuation(activeRoutes.map(toPlanRoute), [toPlanRoute(r)])
           : null;
         const driverDistanceKm = distanceToDriver(r.pickupArea);
         const nearDriver =
@@ -375,16 +389,38 @@ driverRouter.post("/pools", async (req, res, next) => {
       );
     }
 
-    // Every selected trip must fit the same corridor. The service remains
-    // authoritative; the frontend's compatibility hints never replace it.
-    if (!requestsShareCorridor(requests)) {
+    // Every selected trip must fit one ordered route plan. When a fresh
+    // driver point exists, the first leg must also be near that point.
+    const hasFreshVehicleLocation =
+      vehicle.currentLat !== null &&
+      vehicle.currentLng !== null &&
+      vehicle.locationUpdatedAt !== null &&
+      Date.now() - vehicle.locationUpdatedAt.getTime() <=
+        config.matching.locationFreshnessMs;
+    const routePlan = buildRoutePlan(
+      requests.map((request) => ({
+        id: request.id,
+        createdAt: request.createdAt,
+        ...tripEnds(request),
+      })),
+      hasFreshVehicleLocation
+        ? { lat: vehicle.currentLat!, lng: vehicle.currentLng! }
+        : undefined
+    );
+    if (!routePlan) {
       throw errors.conflict(
         "INCOMPATIBLE",
-        "These trips travel in opposite directions or do not share a compatible corridor"
+        "These trips cannot form one continuous route from the driver's current location"
       );
     }
+    const routeOrder = new Map(routePlan.map((request, index) => [request.id, index]));
+    const orderedRequests = [...requests].sort(
+      (first, second) =>
+        (routeOrder.get(first.id) ?? Number.MAX_SAFE_INTEGER) -
+        (routeOrder.get(second.id) ?? Number.MAX_SAFE_INTEGER)
+    );
 
-    const totalSeats = requests.reduce((s, r) => s + r.seatsRequested, 0);
+    const totalSeats = orderedRequests.reduce((s, r) => s + r.seatsRequested, 0);
     if (totalSeats > vehicle.capacity) throw errors.noSeats();
 
     const pool = await prisma.$transaction(async (tx) => {
@@ -411,7 +447,7 @@ driverRouter.post("/pools", async (req, res, next) => {
         },
       });
 
-      for (const r of requests) {
+      for (const r of orderedRequests) {
         const ok = await claimSeatsTx(tx, p.id, r.seatsRequested);
         if (!ok) throw errors.noSeats();
 
@@ -568,10 +604,19 @@ driverRouter.post("/pools/:id/requests", async (req, res, next) => {
         "Some requests are no longer available"
       );
     }
-    if (!requestsShareCorridor([...members.map((member) => member.request), ...requests])) {
+    const existingRoutes = members.map((member) => ({
+      ...member.request,
+      createdAt: member.createdAt,
+    }));
+    if (
+      !canBuildContinuation(
+        existingRoutes.map(toPlanRoute),
+        requests.map(toPlanRoute)
+      )
+    ) {
       throw errors.conflict(
         "INCOMPATIBLE",
-        "One or more trips travel in an opposite direction or do not fit this pool's corridor"
+        "One or more trips cannot form a continuous route with this pool"
       );
     }
 

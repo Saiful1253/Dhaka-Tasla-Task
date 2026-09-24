@@ -184,42 +184,6 @@ function labelsOverlap(first: LabelBox, second: LabelBox): boolean {
   );
 }
 
-/** Mirrors the API's material opposite-direction threshold. */
-const OPPOSITE_DIRECTION_ANGLE_DEG = 135;
-
-function mapRouteVector(
-  pickup: MapLocation,
-  dest: MapLocation,
-): { x: number; y: number } {
-  const midpointLat =
-    ((pickup.lat + dest.lat) / 2) * (Math.PI / 180);
-  return {
-    x: (dest.lng - pickup.lng) * Math.cos(midpointLat),
-    y: dest.lat - pickup.lat,
-  };
-}
-
-function mapRoutesAreOpposite(a: DriverRequest, b: DriverRequest): boolean {
-  const aPickup = resolveLocation(a.pickupLocation, a.pickup);
-  const aDest = resolveLocation(a.destLocation, a.dest);
-  const bPickup = resolveLocation(b.pickupLocation, b.pickup);
-  const bDest = resolveLocation(b.destLocation, b.dest);
-  if (!aPickup || !aDest || !bPickup || !bDest) return false;
-
-  const first = mapRouteVector(aPickup, aDest);
-  const second = mapRouteVector(bPickup, bDest);
-  const firstLength = Math.hypot(first.x, first.y);
-  const secondLength = Math.hypot(second.x, second.y);
-  if (firstLength < 1e-9 || secondLength < 1e-9) return false;
-
-  const firstAngle = Math.atan2(first.y, first.x);
-  const secondAngle = Math.atan2(second.y, second.x);
-  const difference =
-    Math.abs(firstAngle - secondAngle) * (180 / Math.PI);
-  const angle = Math.min(difference, 360 - difference);
-  return angle >= OPPOSITE_DIRECTION_ANGLE_DEG;
-}
-
 function project(location: MapLocation, width: number, height: number) {
   const left = width * 0.08;
   const right = width * 0.04;
@@ -268,11 +232,13 @@ function waitingRouteState(
   }
 
   if (selectedIds.size === 0) {
-    const hasOppositePeer = requests.some(
+    if (requests.length <= 1) return "compatible";
+    const hasCompatiblePeer = requests.some(
       (other) =>
-        other.id !== request.id && mapRoutesAreOpposite(request, other),
+        other.id !== request.id &&
+        other.compatibility.compatibleRequestIds.includes(request.id),
     );
-    return hasOppositePeer ? "conflict" : "compatible";
+    return hasCompatiblePeer ? "compatible" : "conflict";
   }
 
   const selectedRequests = requests.filter((item) => selectedIds.has(item.id));
@@ -281,11 +247,8 @@ function waitingRouteState(
       !selected.compatibility.compatibleRequestIds.includes(request.id) ||
       !request.compatibility.compatibleRequestIds.includes(selected.id),
   );
-  const hasOppositeSelectedPeer = selectedRequests.some((selected) =>
-    mapRoutesAreOpposite(request, selected),
-  );
 
-  return breaksPairing || hasOppositeSelectedPeer ? "conflict" : "compatible";
+  return breaksPairing ? "conflict" : "compatible";
 }
 
 function makeWaitingRoute(
@@ -601,8 +564,8 @@ export function DriverRouteMap({
         </g>
 
         {driverPoint ? (
-          <g aria-label="Driver current GPS location" data-driver-location="true">
-            <title>Driver current GPS location</title>
+          <g aria-label="Driver live GPS location" data-driver-location="true">
+            <title>Driver live GPS location</title>
             <circle
               cx={driverPoint.x}
               cy={driverPoint.y}
@@ -642,7 +605,7 @@ export function DriverRouteMap({
               fontWeight="700"
               letterSpacing="0.5"
             >
-              DRIVER GPS
+              LIVE GPS
             </text>
           </g>
         ) : null}
@@ -809,8 +772,8 @@ export function DriverRouteMap({
             Route signal
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-ink/65">
-            Schematic Dhaka corridors · oldest requests first · opposite routes
-            are flagged · nothing assigns automatically.
+            Schematic Dhaka corridors · oldest requests first · chained pickup/drop
+            routes supported · nothing assigns automatically.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3 border border-ink/10 bg-paper px-3 py-2">
@@ -833,7 +796,7 @@ export function DriverRouteMap({
             : "No active pool · waiting routes only"}
         </p>
         <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-ink/55">
-          {driverLocation ? "Driver GPS plotted" : "Driver GPS not shared"} · Pickup{" "}
+          {driverLocation ? "Live GPS plotted" : "Live GPS not shared"} · Pickup{" "}
           <ArrowRight aria-hidden="true" className="mx-1 inline h-3 w-3" />
           destination
         </p>
@@ -910,7 +873,7 @@ export function DriverRouteMap({
             >
               <li className="flex items-center gap-2 text-xs font-semibold text-ink/70">
                 <span className="h-2 w-2 rounded-full bg-lime ring-2 ring-lime/30" aria-hidden="true" />
-                Driver GPS
+                Live GPS
               </li>
               <li className="flex items-center gap-2 text-xs font-semibold text-ink/70">
                 <span className="h-0.5 w-8 bg-lime" aria-hidden="true" />

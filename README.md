@@ -61,8 +61,8 @@ Live Link: frontend-hazel-eta-btpcw9eq0e.vercel.app
 - [x] Next.js passenger and driver consoles with responsive async states
 - [x] Privacy-safe live booking activity + driver manual assignment
 - [x] Driver-only manual assignment with atomic capacity enforcement; passenger requests remain unassigned until the driver selects them
-- [x] Driver schematic route map with direction arrows, queue priority, incompatible-route highlighting, and live GPS marker
-- [x] Browser-GPS driver location sharing with nearby compatible-request suggestions and one-click assignment
+- [x] Driver schematic route map with direction arrows, queue priority, chained pickup/drop routes, incompatible-route highlighting, and live GPS marker
+- [x] Browser-GPS driver location sharing with continuous local marker updates, throttled backend sync, nearby compatible-request suggestions, and one-click assignment
 - [x] Driver add-to-pool flow, seat meter, lifecycle actions, roster, and event trail
 - [x] New driver signup provisions a default capacity-3 vehicle
 - [x] Frontend production build and repeatable smoke check
@@ -74,7 +74,7 @@ Live Link: frontend-hazel-eta-btpcw9eq0e.vercel.app
 
 Some requirements were intentionally left open. These are the assumptions made, documented, and applied consistently:
 
-1. **Matching rule:** the driver may assign a waiting request to a matched pool when it has the **same pickup area** *OR* an overlapping pickup→destination corridor with every existing member, provided the routes are not materially opposite. Compatible waiting requests are shown oldest first (soft first-come priority), but the driver still confirms every assignment. Nusrat (Banani→Mohakhali), Rafiq (Banani→Gulshan 1), and Shirin (Banani→Dhanmondi) share Banani; capacity still determines who receives the last seat.
+1. **Matching rule:** the driver may assign requests that form one ordered route plan. Requests on the same leg (same/near pickup and destination) can travel together, and a request can continue from another request's destination when the pickup is at/near that handoff. A handoff that immediately returns to the prior origin is rejected. The queue is oldest-first, so the first request anchors the suggestion; a later divergent/opposite branch is not suggested ahead of it. The driver still confirms every assignment.
 2. **Money is stored as whole Taka (৳).** Values are integers — avoids floating-point drift and keeps fares exact and hand-verifiable.
 3. **Cancellation is allowed only in `REQUESTED` or `MATCHED`** (i.e. before the driver arrives). Once `DRIVER_ARRIVED` the trip is considered committed; only the driver/admin could cancel.
 4. **One active pool per vehicle at a time.** A vehicle's pool must reach `COMPLETED`/`CANCELLED` before a new one opens — keeps capacity accounting trivial and correct.
@@ -455,9 +455,9 @@ Base URL: local `http://localhost:4000` or the deployed Vercel API origin · Aut
 ### Driver & pool
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/driver/requests` | driver | vehicle + waiting requests + corridor/active-pool validation hints |
+| GET | `/driver/requests` | driver | vehicle + waiting requests + ordered route-plan/active-pool validation hints and grouped suggestions |
 | POST | `/driver/online` | driver | toggle online/offline |
-| POST | `/driver/location` | driver | share a browser GPS point while online; used for nearby route suggestions |
+| POST | `/driver/location` | driver | sync the latest browser GPS point while online; local map updates continuously and server writes are throttled |
 | POST | `/driver/pools` | driver | manually assign selected `{requestIds}` — atomic capacity check |
 | POST | `/driver/pools/:id/requests` | driver (owner) | manually add selected compatible passengers before arrival |
 | GET | `/driver/pools` | driver | my pools, passengers, seats, events |

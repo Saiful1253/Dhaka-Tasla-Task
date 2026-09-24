@@ -25,6 +25,7 @@ let gulshan1Id = 0;
 let dhanmondiId = 0;
 let mirpurId = 0;
 let uttaraId = 0;
+let farmgateId = 0;
 
 async function login(email: string): Promise<string> {
   const res = await request(app)
@@ -78,6 +79,7 @@ beforeAll(async () => {
     { name: "Dhanmondi", lat: 23.7461, lng: 90.3742 },
     { name: "Mirpur", lat: 23.8069, lng: 90.3687 },
     { name: "Uttara", lat: 23.8759, lng: 90.3795 },
+    { name: "Farmgate", lat: 23.7574, lng: 90.3885 },
   ];
   const created: Record<string, number> = {};
   for (const a of areas) {
@@ -90,6 +92,7 @@ beforeAll(async () => {
   dhanmondiId = created["Dhanmondi"];
   mirpurId = created["Mirpur"];
   uttaraId = created["Uttara"];
+  farmgateId = created["Farmgate"];
 
   jashimToken = await login("jashim@test.bd");
   nusratToken = await login("nusrat@test.bd");
@@ -564,7 +567,119 @@ describe("6. Two concurrent manual assignments can't corrupt pool capacity", () 
     expect(suggested.compatibility.suggested).toBe(true);
     expect(suggested.compatibility.suggestionReason).toBe("NEAR_DRIVER");
     expect(suggested.compatibility.nearDriver).toBe(true);
-    expect(other.compatibility.suggested).toBe(false);
+    expect(other.compatibility.suggested).toBe(true);
+  });
+
+  it("accepts an ordered pickup-to-destination handoff", async () => {
+    await request(app)
+      .post("/driver/location")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ lat: 23.7937, lng: 90.4066 });
+
+    const first = await makeRide(nusratToken, bananiId, uttaraId, 1);
+    const second = await makeRide(rafiqToken, uttaraId, mirpurId, 1);
+
+    const pool = await request(app)
+      .post("/driver/pools")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [second.id, first.id] });
+
+    expect(pool.status).toBe(201);
+    expect(
+      await prisma.rideRequest.count({
+        where: { id: { in: [first.id, second.id] }, status: "MATCHED" },
+      })
+    ).toBe(2);
+  });
+
+  it("adds a chained request to an active pool without reordering the first leg", async () => {
+    const first = await makeRide(nusratToken, bananiId, uttaraId, 1);
+    const firstPool = await request(app)
+      .post("/driver/pools")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [first.id] });
+    expect(firstPool.status).toBe(201);
+
+    const continuation = await makeRide(rafiqToken, uttaraId, mirpurId, 1);
+    const branch = await makeRide(shirinToken, bananiId, farmgateId, 1);
+    const addContinuation = await request(app)
+      .post(`/driver/pools/${firstPool.body.pool.id}/requests`)
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [continuation.id] });
+    expect(addContinuation.status).toBe(201);
+
+    const addBranch = await request(app)
+      .post(`/driver/pools/${firstPool.body.pool.id}/requests`)
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [branch.id] });
+    expect(addBranch.status).toBe(409);
+    expect(addBranch.body.error.code).toBe("INCOMPATIBLE");
+  });
+
+  it("rejects a handoff that immediately returns to the prior pickup", async () => {
+    const forward = await makeRide(nusratToken, bananiId, uttaraId, 1);
+    const backtrack = await makeRide(rafiqToken, uttaraId, bananiId, 1);
+
+    const pool = await request(app)
+      .post("/driver/pools")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [forward.id, backtrack.id] });
+
+    expect(pool.status).toBe(409);
+    expect(pool.body.error.code).toBe("INCOMPATIBLE");
+  });
+
+  it("groups identical same-leg requests and keeps a later opposite branch waiting", async () => {
+    await request(app)
+      .post("/driver/location")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ lat: 23.7937, lng: 90.4066 });
+
+    const first = await makeRide(nusratToken, bananiId, uttaraId, 1);
+    const second = await makeRide(rafiqToken, bananiId, uttaraId, 1);
+    const branch = await makeRide(shirinToken, bananiId, farmgateId, 1);
+    await prisma.rideRequest.update({
+      where: { id: first.id },
+      data: { createdAt: new Date("2026-01-01T10:00:00.000Z") },
+    });
+    await prisma.rideRequest.update({
+      where: { id: second.id },
+      data: { createdAt: new Date("2026-01-01T10:01:00.000Z") },
+    });
+    await prisma.rideRequest.update({
+      where: { id: branch.id },
+      data: { createdAt: new Date("2026-01-01T10:02:00.000Z") },
+    });
+
+    const board = await request(app)
+      .get("/driver/requests")
+      .set("Authorization", `Bearer ${jashimToken}`);
+
+    expect(board.status).toBe(200);
+    expect(board.body.suggestedRequestIds).toEqual([first.id, second.id]);
+    const branchRow = board.body.requests.find(
+      (item: { id: number }) => item.id === branch.id,
+    );
+    expect(branchRow.compatibility.suggested).toBe(false);
+    expect(branchRow.compatibility.compatibleRequestIds).not.toContain(first.id);
+  });
+
+  it("updates the stored driver point when the GPS position changes", async () => {
+    await request(app)
+      .post("/driver/location")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ lat: 23.7937, lng: 90.4066 });
+    const moved = await request(app)
+      .post("/driver/location")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ lat: 23.7925, lng: 90.4078 });
+
+    expect(moved.status).toBe(200);
+    const board = await request(app)
+      .get("/driver/requests")
+      .set("Authorization", `Bearer ${jashimToken}`);
+    expect(board.body.vehicle.location.lat).toBeCloseTo(23.7925);
+    expect(board.body.vehicle.location.lng).toBeCloseTo(90.4078);
   });
 
   it("faraway trips are rejected by the matching rule", async () => {

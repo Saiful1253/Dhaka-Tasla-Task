@@ -22,5 +22,7 @@ export const config = {
     oppositeDirectionAngleDeg: 135,
     /** a route may continue when its pickup is at/near the previous destination */
     routeHandoffRadiusKm: 2.5,
+    /** stale driver points are not used for new suggestions or route starts */
+    locationFreshnessMs: 120_000,
   },
 };

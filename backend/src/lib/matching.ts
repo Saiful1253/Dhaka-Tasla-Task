@@ -80,10 +80,21 @@ function isSafeHandoff(previous: TripEnds, next: TripEnds): boolean {
   const handoffDistance = pointDistance(previous.dest, next.pickup);
   if (handoffDistance > config.matching.routeHandoffRadiusKm) return false;
 
-  // Do not turn a chain into an immediate backtrack (for example,
-  // Banani -> Uttara, then Uttara -> Banani).
-  const returnDistance = pointDistance(previous.pickup, next.dest);
-  return returnDistance > config.matching.routeHandoffRadiusKm;
+  // Do not turn a chain into an immediate backtrack. Reject both
+  // Banani -> Mohakhali followed by Banani -> Uttara (same starting point)
+  // and Banani -> Uttara followed by Uttara -> Banani (return to the origin).
+  const startsAtPreviousOrigin = pointDistance(
+    previous.pickup,
+    next.pickup
+  );
+  const returnsToPreviousOrigin = pointDistance(
+    previous.pickup,
+    next.dest
+  );
+  return (
+    startsAtPreviousOrigin > config.matching.routeHandoffRadiusKm &&
+    returnsToPreviousOrigin > config.matching.routeHandoffRadiusKm
+  );
 }
 
 /** True when two requests can travel together on the same leg. */
@@ -199,4 +210,39 @@ export function canBuildRoutePlan(
   start?: RoutePoint,
 ): boolean {
   return buildRoutePlan(routes, start) !== null;
+}
+
+/**
+ * Validate additions after an already dispatched route. Existing members stay
+ * in their original order; a new request may join the current leg or continue
+ * from the final destination, but it cannot reorder the driver's trip.
+ */
+export function canBuildContinuation<T extends RoutePlanRequest>(
+  existing: T[],
+  additions: T[],
+): boolean {
+  if (additions.length === 0) return true;
+  if (existing.length === 0) return buildRoutePlan(additions) !== null;
+
+  const previous = existing[existing.length - 1];
+  const ordered = additions
+    .map((route, index) => ({ route, index }))
+    .sort(compareRoutePriority);
+
+  function search(
+    remaining: Array<{ route: T; index: number }>,
+    last: T,
+  ): boolean {
+    if (remaining.length === 0) return true;
+    for (const candidate of remaining) {
+      if (!areCompatible(last, candidate.route)) continue;
+      const nextRemaining = remaining.filter(
+        (other) => other.index !== candidate.index
+      );
+      if (search(nextRemaining, candidate.route)) return true;
+    }
+    return false;
+  }
+
+  return search(ordered, previous);
 }

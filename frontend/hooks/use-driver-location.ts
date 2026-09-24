@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiFetch, getErrorCode, getErrorMessage } from "@/lib/api/client";
 import type { MapLocation } from "@/lib/api/types";
@@ -17,61 +17,102 @@ interface LocationResponse {
   location: MapLocation & { updatedAt: string };
 }
 
-const LOCATION_REFRESH_MS = 30_000;
+const LOCATION_SYNC_INTERVAL_MS = 10_000;
 const GEOLOCATION_OPTIONS: PositionOptions = {
   enableHighAccuracy: true,
-  maximumAge: 15_000,
-  timeout: 15_000,
+  maximumAge: 5_000,
+  timeout: 20_000,
 };
 
 /**
- * Shares a driver's browser GPS point while the vehicle is online. The hook is
- * intentionally permission-driven: the driver explicitly enables location
- * sharing, then the point is refreshed every 30 seconds.
+ * Shares a driver's browser GPS point while the vehicle is online. The local
+ * marker follows every watchPosition callback immediately; writes to the API
+ * are throttled so a moving phone does not flood the backend.
  */
 export function useDriverLocation(isOnline: boolean) {
   const [location, setLocation] = useState<MapLocation | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [status, setStatus] = useState<DriverLocationStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const isOnlineRef = useRef(isOnline);
+  const watchIdRef = useRef<number | null>(null);
+  const lastSentAtRef = useRef(0);
 
-  const sharePosition = useCallback((position: GeolocationPosition) => {
-    const nextLocation: MapLocation = {
-      lat: position.coords.latitude,
-      lng: position.coords.longitude,
-    };
-    setLocation(nextLocation);
-    setStatus("active");
-    setError(null);
+  useEffect(() => {
+    isOnlineRef.current = isOnline;
+  }, [isOnline]);
 
-    void apiFetch<LocationResponse>("/driver/location", {
-      method: "POST",
-      auth: true,
-      body: nextLocation,
-    })
-      .then((result) => setLastUpdatedAt(result.location.updatedAt))
-      .catch((requestError) => {
-        if (getErrorCode(requestError) === "VEHICLE_OFFLINE") {
-          setStatus("idle");
-          return;
-        }
-        setError(getErrorMessage(requestError));
-      });
-  }, []);
-
-  const handleLocationError = useCallback((locationError: GeolocationPositionError) => {
-    if (locationError.code === locationError.PERMISSION_DENIED) {
-      setStatus("denied");
-      setError("Location permission was denied. Enable it in browser settings to use nearby suggestions.");
-      return;
+  const stopWatching = useCallback(() => {
+    if (
+      watchIdRef.current !== null &&
+      typeof navigator !== "undefined" &&
+      navigator.geolocation
+    ) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
     }
-    setStatus("error");
-    setError(
-      locationError.code === locationError.TIMEOUT
-        ? "Location request timed out. Try again when you have a clearer signal."
-        : "Your location could not be determined. Try again."
-    );
+    watchIdRef.current = null;
   }, []);
+
+  const sharePosition = useCallback(
+    (position: GeolocationPosition) => {
+      if (!isOnlineRef.current) return;
+
+      const nextLocation: MapLocation = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+      };
+      // This local state update is deliberately not throttled. The SVG marker
+      // should move as soon as the browser produces a new GPS fix.
+      setLocation(nextLocation);
+      setStatus("active");
+      setError(null);
+
+      const now = Date.now();
+      const shouldSync =
+        lastSentAtRef.current === 0 ||
+        now - lastSentAtRef.current >= LOCATION_SYNC_INTERVAL_MS;
+      if (!shouldSync) return;
+
+      lastSentAtRef.current = now;
+      setLastUpdatedAt(new Date(now).toISOString());
+      void apiFetch<LocationResponse>("/driver/location", {
+        method: "POST",
+        auth: true,
+        body: nextLocation,
+      })
+        .then((result) => setLastUpdatedAt(result.location.updatedAt))
+        .catch((requestError) => {
+          lastSentAtRef.current = 0;
+          if (getErrorCode(requestError) === "VEHICLE_OFFLINE") {
+            stopWatching();
+            setStatus("idle");
+            return;
+          }
+          setError(getErrorMessage(requestError));
+        });
+    },
+    [stopWatching],
+  );
+
+  const handleLocationError = useCallback(
+    (locationError: GeolocationPositionError) => {
+      stopWatching();
+      if (locationError.code === locationError.PERMISSION_DENIED) {
+        setStatus("denied");
+        setError(
+          "Location permission was denied. Enable it in browser settings to use nearby suggestions."
+        );
+        return;
+      }
+      setStatus("error");
+      setError(
+        locationError.code === locationError.TIMEOUT
+          ? "Location request timed out. Try again when you have a clearer signal."
+          : "Your location could not be determined. Try again."
+      );
+    },
+    [stopWatching],
+  );
 
   const enableLocation = useCallback(() => {
     if (!isOnline) {
@@ -85,37 +126,34 @@ export function useDriverLocation(isOnline: boolean) {
       return;
     }
 
+    stopWatching();
+    lastSentAtRef.current = 0;
     setStatus("requesting");
     setError(null);
-    navigator.geolocation.getCurrentPosition(
-      sharePosition,
-      handleLocationError,
-      GEOLOCATION_OPTIONS
-    );
-  }, [handleLocationError, isOnline, sharePosition]);
+    try {
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        sharePosition,
+        handleLocationError,
+        GEOLOCATION_OPTIONS
+      );
+    } catch {
+      setStatus("error");
+      setError("Live location could not be started in this browser.");
+    }
+  }, [handleLocationError, isOnline, sharePosition, stopWatching]);
 
   useEffect(() => {
     if (!isOnline) {
+      stopWatching();
+      lastSentAtRef.current = 0;
       setLocation(null);
       setLastUpdatedAt(null);
       setStatus("idle");
       setError(null);
-      return;
     }
-    if (status !== "active" || typeof navigator === "undefined" || !navigator.geolocation) {
-      return;
-    }
+  }, [isOnline, stopWatching]);
 
-    const refreshLocation = () => {
-      navigator.geolocation.getCurrentPosition(
-        sharePosition,
-        () => undefined,
-        GEOLOCATION_OPTIONS
-      );
-    };
-    const intervalId = window.setInterval(refreshLocation, LOCATION_REFRESH_MS);
-    return () => window.clearInterval(intervalId);
-  }, [isOnline, sharePosition, status]);
+  useEffect(() => () => stopWatching(), [stopWatching]);
 
   return {
     location,

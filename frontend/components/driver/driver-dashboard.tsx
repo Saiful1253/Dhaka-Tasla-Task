@@ -53,6 +53,7 @@ import { useAuth } from "@/providers/auth-provider";
 interface RequestsResponse {
   vehicle: DriverVehicle;
   requests: DriverRequest[];
+  suggestedRequestIds: number[];
 }
 
 interface PoolsResponse {
@@ -77,7 +78,7 @@ interface HistoryDeleteResponse {
 function getLocationStatusLabel(status: DriverLocationStatus): string {
   switch (status) {
     case "active":
-      return "Location sharing active";
+      return "Live GPS sharing active";
     case "requesting":
       return "Requesting GPS permission";
     case "denied":
@@ -100,7 +101,7 @@ const ACTION_TOAST: Record<Exclude<PoolAction, "cancel">, string> = {
 function getActionErrorTitle(error: unknown): string {
   switch (getErrorCode(error)) {
     case "INCOMPATIBLE":
-      return "Opposite direction or different corridor";
+      return "Route does not fit this trip";
     case "NO_SEATS":
       return "Not enough seats for this selection";
     case "VEHICLE_OFFLINE":
@@ -145,6 +146,7 @@ export function DriverDashboard() {
   const { toast, showToast, dismissToast } = useToast();
   const [vehicle, setVehicle] = useState<DriverVehicle | null>(null);
   const [requests, setRequests] = useState<DriverRequest[]>([]);
+  const [suggestedRequestIds, setSuggestedRequestIds] = useState<number[]>([]);
   const [pools, setPools] = useState<DriverPool[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -158,10 +160,17 @@ export function DriverDashboard() {
   const [deleteAllHistoryOpen, setDeleteAllHistoryOpen] = useState(false);
   const [deletingHistory, setDeletingHistory] = useState(false);
   const locationSharing = useDriverLocation(Boolean(vehicle?.isOnline));
-  const suggestedRequest = useMemo(
-    () => requests.find((request) => request.compatibility.suggested) ?? null,
-    [requests]
-  );
+  const suggestedRequests = useMemo(() => {
+    const ids = new Set(suggestedRequestIds);
+    return requests.filter((request) => ids.has(request.id));
+  }, [requests, suggestedRequestIds]);
+  const suggestedRequest = suggestedRequests[0] ?? null;
+  const displayedDriverLocation =
+    locationSharing.status === "denied" ||
+    locationSharing.status === "error" ||
+    locationSharing.status === "unsupported"
+      ? null
+      : locationSharing.location ?? vehicle?.location ?? null;
 
   const activePools = useMemo(
     () => pools.filter((pool) => !isTerminalPool(pool.status)),
@@ -186,7 +195,7 @@ export function DriverDashboard() {
         return `Pool #${activePool.id} is past the matching stage`;
       }
       if (!request.compatibility.fitsActivePool) {
-        return "Opposite direction or different corridor from the active pool";
+        return "Cannot continue the active route from this pickup";
       }
       if (
         request.seats >
@@ -205,7 +214,7 @@ export function DriverDashboard() {
           !request.compatibility.compatibleRequestIds.includes(selected.id)),
     );
     return breaksPairing
-      ? "Opposite direction or different corridor from this selection"
+      ? "Cannot form one continuous route with this selection"
       : null;
   }
 
@@ -213,6 +222,7 @@ export function DriverDashboard() {
     (requestData: RequestsResponse, poolData: PoolsResponse) => {
       setVehicle(requestData.vehicle);
       setRequests(requestData.requests);
+      setSuggestedRequestIds(requestData.suggestedRequestIds ?? []);
       setPools(poolData.pools.map(normalizeDriverPool));
       const availableIds = new Set(
         requestData.requests
@@ -293,7 +303,15 @@ export function DriverDashboard() {
         method: "POST",
         auth: true,
       });
-      setVehicle((current) => (current ? { ...current, isOnline: data.isOnline } : current));
+      setVehicle((current) =>
+        current
+          ? {
+              ...current,
+              isOnline: data.isOnline,
+              location: data.isOnline ? current.location : null,
+            }
+          : current
+      );
       showToast({
         tone: "success",
         message: data.isOnline
@@ -352,15 +370,23 @@ export function DriverDashboard() {
   }
 
   async function handleAssignSuggested() {
-    if (!suggestedRequest || !vehicle?.isOnline || actionPending) return;
+    if (
+      suggestedRequests.length === 0 ||
+      !vehicle?.isOnline ||
+      actionPending
+    ) {
+      return;
+    }
     if (
       activePool &&
       (activePool.status !== "MATCHED" ||
-        suggestedRequest.seats > Math.max(0, activePool.capacity - activePool.seatsTaken))
+        suggestedRequests.reduce((sum, request) => sum + request.seats, 0) >
+          Math.max(0, activePool.capacity - activePool.seatsTaken))
     ) {
       return;
     }
 
+    const requestIds = suggestedRequests.map((request) => request.id);
     setActionPending("suggested");
     setActionError(null);
     try {
@@ -369,15 +395,15 @@ export function DriverDashboard() {
         {
           method: "POST",
           auth: true,
-          body: { requestIds: [suggestedRequest.id] },
+          body: { requestIds },
         }
       );
       setSelectedIds(new Set());
       showToast({
         tone: "success",
         message: activePool
-          ? `Suggested request added to pool #${data.pool.id}; capacity is now ${data.pool.seatsTaken}/${activePool.capacity}.`
-          : `Suggested request assigned to new pool #${data.pool.id}.`,
+          ? `${requestIds.length} suggested request${requestIds.length === 1 ? "" : "s"} added to pool #${data.pool.id}; capacity is now ${data.pool.seatsTaken}/${activePool.capacity}.`
+          : `${requestIds.length} suggested request${requestIds.length === 1 ? "" : "s"} assigned to new pool #${data.pool.id}.`,
       });
     } catch (error) {
       setActionError(error);
@@ -715,9 +741,11 @@ export function DriverDashboard() {
                             {suggestedRequest.passenger.name} · {suggestedRequest.pickup} → {suggestedRequest.dest}
                           </p>
                           <p className="mt-1 text-xs leading-5 text-ink/65">
-                            {suggestedRequest.compatibility.driverDistanceKm !== null
-                              ? `${suggestedRequest.compatibility.driverDistanceKm.toFixed(2)} km from your GPS point · compatible corridor`
-                              : "Compatible corridor near your current location"}
+                            {suggestedRequests.length > 1
+                              ? `${suggestedRequests.length} matching requests on this leg`
+                              : suggestedRequest.compatibility.driverDistanceKm !== null
+                                ? `${suggestedRequest.compatibility.driverDistanceKm.toFixed(2)} km from your GPS point · next route leg`
+                                : "Compatible corridor near your current location"}
                           </p>
                         </div>
                       </div>
@@ -729,7 +757,9 @@ export function DriverDashboard() {
                         disabled={Boolean(actionPending) || !vehicle?.isOnline}
                         className="shrink-0"
                       >
-                        {activePool ? "Add to pool" : "Assign now"}
+                        {activePool
+                          ? `Add ${suggestedRequests.length} to pool`
+                          : `Assign ${suggestedRequests.length} now`}
                       </Button>
                     </div>
                   </div>
@@ -897,7 +927,7 @@ export function DriverDashboard() {
                             : "Select at least one passenger to create the manifest."
                           : selectedOverCapacity
                             ? `This selection needs ${selectedSeats} seats; only ${availableCapacity} can be added to the current manifest.`
-                            : `${selectedIds.size} passenger${selectedIds.size === 1 ? "" : "s"} selected. Confirm to assign; the API then checks direction, corridor, and capacity.`}
+                            : `${selectedIds.size} passenger${selectedIds.size === 1 ? "" : "s"} selected. Confirm to assign; the API then checks the continuous route, direction, and capacity.`}
                   </p>
                 </div>
               </section>
@@ -907,7 +937,7 @@ export function DriverDashboard() {
               requests={requests}
               selectedIds={selectedIds}
               activePool={activePool}
-              driverLocation={vehicle?.location ?? locationSharing.location}
+              driverLocation={displayedDriverLocation}
             />
 
             <section aria-labelledby="active-pools-heading">
