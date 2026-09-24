@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BatteryCharging,
-  CarFront,
   CheckCircle2,
   CircleDot,
   Clock3,
@@ -21,6 +20,7 @@ import {
 import { AppHeader } from "@/components/app-header";
 import { DriverRouteMap } from "@/components/driver/driver-route-map";
 import { PoolCard, type PoolAction } from "@/components/driver/pool-card";
+import { RickshawIcon } from "@/components/rickshaw-icon";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -633,12 +633,15 @@ export function DriverDashboard() {
 
                   <div className="mt-8 flex items-end justify-between gap-4 border-b border-porcelain/10 pb-5">
                     <div>
-                      <p className="font-mono text-[9px] uppercase tracking-[0.15em] text-cyan/65">Tesla seats</p>
+                      <p className="font-mono text-[9px] uppercase tracking-[0.15em] text-cyan/65">Rickshaw seats</p>
                       <p className="mt-1 font-display text-6xl font-bold leading-none tracking-[-0.08em] text-lime">
                         {capacity}
                       </p>
                     </div>
-                    <CarFront aria-hidden="true" className="h-16 w-16 text-cyan/25" strokeWidth={1.2} />
+                    <RickshawIcon
+                      tone="outline"
+                      className="h-16 w-28 text-cyan/25"
+                    />
                   </div>
 
                   <SeatMeter

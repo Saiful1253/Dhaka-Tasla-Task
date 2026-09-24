@@ -1,4 +1,4 @@
-import { Zap } from "lucide-react";
+import { RickshawIcon } from "@/components/rickshaw-icon";
 
 interface BrandMarkProps {
   inverse?: boolean;
@@ -14,13 +14,15 @@ export function BrandMark({
   return (
     <div className={`flex items-center gap-3 ${className}`}>
       <span
-        className={`relative flex h-10 w-10 shrink-0 items-center justify-center border ${
-          inverse
-            ? "border-lime bg-lime text-ink"
-            : "border-ink bg-ink text-lime"
+        className={`relative flex h-10 w-10 shrink-0 items-center justify-center border text-ink ${
+          inverse ? "border-lime bg-lime" : "border-ink bg-ink"
         }`}
       >
-        <Zap aria-hidden="true" className="h-5 w-5 fill-current" strokeWidth={1.6} />
+        <RickshawIcon
+          size={36}
+          tone={inverse ? "inverse" : "brand"}
+          className="h-9 w-9"
+        />
         <span
           className={`absolute -right-1 -top-1 h-2 w-2 ${
             inverse ? "bg-cyan" : "bg-lime"

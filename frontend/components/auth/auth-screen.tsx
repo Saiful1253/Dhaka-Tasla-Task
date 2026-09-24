@@ -4,7 +4,6 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
-  CarFront,
   Check,
   Eye,
   EyeOff,
@@ -16,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { BrandMark } from "@/components/brand-mark";
+import { RickshawIcon } from "@/components/rickshaw-icon";
 import { Button } from "@/components/ui/button";
 import { Field, inputClassName } from "@/components/ui/field";
 import { NoticeBanner } from "@/components/ui/feedback";
@@ -150,6 +150,12 @@ export function AuthScreen() {
           </span>
         </div>
 
+        <RickshawIcon
+          tone="outline"
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-10 left-1/2 hidden h-auto w-[420px] -translate-x-1/2 text-porcelain/[0.04] xl:block"
+        />
+
         <div className="relative z-10 my-auto grid gap-10 py-12 lg:grid-cols-[minmax(0,1fr)_260px] lg:items-center lg:py-16">
           <div className="max-w-2xl animate-reveal">
             <p className="dark-eyebrow">North Dhaka · shared seats · clear fares</p>
@@ -210,7 +216,7 @@ export function AuthScreen() {
                 <span className="text-cyan/65">Your share</span>
                 <span className="text-lime">Whole Taka</span>
               </div>
-              <div className="mt-3 grid grid-cols-3 gap-1.5" aria-label="Three Tesla seats">
+              <div className="mt-3 grid grid-cols-3 gap-1.5" aria-label="Three rickshaw seats">
                 <span className="h-2 bg-lime" />
                 <span className="h-2 border border-cyan/35 bg-cyan/5" />
                 <span className="h-2 border border-cyan/35 bg-cyan/5" />
@@ -245,7 +251,7 @@ export function AuthScreen() {
               </h2>
               <p className="mt-2 text-sm leading-6 text-ink/60">
                 {mode === "login"
-                  ? "Sign in to follow your ride or dispatch your Tesla."
+                  ? "Sign in to follow your ride or dispatch your rickshaw."
                   : "Choose how you will move through Dhaka today."}
               </p>
             </div>
@@ -380,10 +386,10 @@ export function AuthScreen() {
                   <div className="mt-2 grid grid-cols-2 gap-2">
                     {(
                       [
-                        { value: "passenger", label: "Passenger", Icon: UserRound },
-                        { value: "driver", label: "Driver", Icon: CarFront },
+                        { value: "passenger", label: "Passenger", icon: "passenger" },
+                        { value: "driver", label: "Driver", icon: "rickshaw" },
                       ] as const
-                    ).map(({ value, label, Icon }) => (
+                    ).map(({ value, label, icon }) => (
                       <label
                         key={value}
                         className={`relative flex min-h-[74px] cursor-pointer items-center gap-3 border p-3 transition focus-within:ring-2 focus-within:ring-cyan ${
@@ -405,7 +411,15 @@ export function AuthScreen() {
                             role === value ? "bg-lime text-ink" : "bg-paper text-ink"
                           }`}
                         >
-                          <Icon aria-hidden="true" className="h-4 w-4" />
+                          {icon === "passenger" ? (
+                            <UserRound aria-hidden="true" className="h-4 w-4" />
+                          ) : (
+                            <RickshawIcon
+                              size={20}
+                              tone={role === value ? "inverse" : "brand"}
+                              className="h-5 w-5"
+                            />
+                          )}
                         </span>
                         <span>
                           <span className="block font-display text-sm font-bold">{label}</span>
@@ -414,7 +428,7 @@ export function AuthScreen() {
                               role === value ? "text-cyan/70" : "text-ink/65"
                             }`}
                           >
-                            {value === "passenger" ? "Request a seat" : "Dispatch your Tesla"}
+                            {value === "passenger" ? "Request a seat" : "Dispatch your rickshaw"}
                           </span>
                         </span>
                       </label>

@@ -2,7 +2,6 @@
 
 import {
   ArrowRight,
-  CarFront,
   CheckCircle2,
   CircleDot,
   Clock3,
@@ -16,6 +15,7 @@ import {
   XCircle,
 } from "lucide-react";
 
+import { RickshawIcon } from "@/components/rickshaw-icon";
 import { Button } from "@/components/ui/button";
 import { SeatMeter } from "@/components/ui/seat-meter";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -72,13 +72,13 @@ export function PoolCard({
           </div>
 
           <div className="mt-6 flex items-center gap-3 border-y border-dashed border-ink/20 py-4">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center bg-ink text-lime">
-              <CarFront aria-hidden="true" className="h-5 w-5" />
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center bg-ink text-ink">
+              <RickshawIcon size={20} className="h-5 w-5" />
             </span>
             <div className="min-w-0 flex-1">
               <p className="font-display text-base font-bold text-ink">{pool.vehicle.name}</p>
               <p className="mt-0.5 truncate font-mono text-[9px] uppercase tracking-[0.12em] text-ink/65">
-                {pool.vehicle.plate ?? "Vehicle plate unavailable"} · pool vehicle
+                {pool.vehicle.plate ?? "Vehicle plate unavailable"} · rickshaw vehicle
               </p>
             </div>
             <p className="font-display text-2xl font-bold tracking-[-0.05em] text-ink">
