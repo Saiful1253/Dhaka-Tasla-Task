@@ -191,7 +191,7 @@ export function NoticeBanner({
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss message"
-          className="-mr-1 -mt-1 flex h-9 w-9 items-center justify-center text-ink transition hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan"
+          className="-mr-1 -mt-1 flex h-11 w-11 shrink-0 items-center justify-center text-ink transition hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan"
         >
           <X aria-hidden="true" className="h-4 w-4" />
         </button>
