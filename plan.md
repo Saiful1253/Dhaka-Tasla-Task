@@ -390,7 +390,7 @@ payments(id, fare_id, method[cash|teslapay], status)                    -- simul
 
 # DAY 2 — Frontend + Tests Polish + Docs + Git Release + Video
 
-> **Current status:** core Day 2 implementation is complete locally. Passenger and driver flows, privacy-safe live activity, manual driver assignment plus passenger open-pool joining, the last-seat rejection edge case, frontend Docker image, disposable integration-test stack, screenshots, and README documentation are present. Public deployment, release branches/tag, and the six-minute video remain honest TODOs.
+> **Current status:** core Day 2 implementation is complete locally. Passenger and driver flows, privacy-safe live activity, driver-only manual assignment, the last-seat rejection edge case, frontend Docker image, disposable integration-test stack, screenshots, and README documentation are present. Public deployment, release branches/tag, and the six-minute video remain honest TODOs.
 
 ## ⏱ 09:00 – 11:30 · Hours 9–10.5: `feature/passenger-ui`
 - [x] Pages: Login/Signup → Request Ride (pickup/dest/seats) → **Fare estimate card** → Live status → History
@@ -399,7 +399,7 @@ payments(id, fare_id, method[cash|teslapay], status)                    -- simul
 - [x] Cancel button only in `REQUESTED` / `MATCHED`; backend remains authoritative
 - [x] Fare shown only for the current passenger
 - [x] Privacy-safe live booking activity shows anonymous route/seat hints without names, emails, fares, or IDs
-- [x] Passenger open-pool discovery and join action use the same atomic capacity guard as manual driver selection; full/late joins return a graceful 409 and remain `REQUESTED`
+- [x] Passenger requests remain waiting until a driver manually selects compatible requests; the passenger self-service join route is intentionally disabled
 - [x] Driver board makes the selected passenger set explicit before the atomic assignment/addition mutation
 - Commits: `feat(ui): add passenger ride request flow`, `feat(ui): add ride status and history views`, `fix(ui): handle loading and error states`
 
@@ -415,7 +415,7 @@ payments(id, fare_id, method[cash|teslapay], status)                    -- simul
 ## ⏱ 14:30 – 15:30 · Hour 13: End-to-end pass + edge case
 - [x] Story walkthrough: Nusrat/Rafiq request rides → Jashim opens their pool and assigns Shirin the final seat → a later waiting request receives a graceful full-capacity rejection and stays `REQUESTED` → Jashim advances the lifecycle → history remains visible
 - [x] Desktop/mobile screenshots collected in `docs/screenshots/` and linked from `README.md`
-- [x] Frontend smoke check covers page render, API rewrite, driver board, passenger history, privacy-safe activity, open-pool discovery, and join capacity
+- [x] Frontend smoke check covers page render, API rewrite, driver board, passenger history, and privacy-safe activity
 - [x] Real fixes made during verification: passenger-role guards, driver vehicle provisioning, active-pool handling, atomic membership/fare writes, input normalization, and stale test-database protection
 - Commits: `fix(...)` as needed (real fix commits = good history)
 

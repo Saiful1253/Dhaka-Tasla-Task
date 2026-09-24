@@ -35,9 +35,9 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 
 **Dhaka Tesla Pool** is a full-stack ride-pooling MVP. One driver (Jashim) with one 3-seat vehicle (Bullet) can carry multiple passengers whose trips overlap. Each passenger sees only *their own* fare and request status; the shared roster exposes routes and the common pool lifecycle, but never another passenger's fare. Pool transitions and pooled cancellations are guarded server-side and recorded in an audit trail.
 
-**Problem:** Nusrat wants Banani → Mohakhali, Rafiq wants Banani → Gulshan 1, and 30 seconds later Shirin wants the last seat. Jashim opens the initial pool, compatible passengers can join it, and the server calculates each fare while preventing Bullet's 3 seats from being exceeded — even when two last-seat claims arrive at the exact same instant.
+**Problem:** Nusrat wants Banani → Mohakhali, Rafiq wants Banani → Gulshan 1, and 30 seconds later Shirin wants the last seat. Jashim opens the initial pool, manually selects compatible passengers, and the server calculates each fare while preventing Bullet's 3 seats from being exceeded — even when two last-seat claims arrive at the exact same instant.
 
-> 🚧 **Status:** Day 2 — passenger and driver consoles, manual driver assignment, passenger open-pool joining, signup provisioning, live manifests, Docker frontend, smoke coverage, and release documentation are implemented locally. No public deployment or release tag has been fabricated.
+> 🚧 **Status:** Day 2 — passenger and driver consoles, driver-only manual assignment, signup provisioning, live manifests, Docker frontend, smoke coverage, and release documentation are implemented locally. No public deployment or release tag has been fabricated.
 
 ---
 
@@ -58,7 +58,7 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 - [x] Tests (capacity, transitions, fare, authz, cancellation, concurrency, signup, and full-pool rejection)
 - [x] Next.js passenger and driver consoles with responsive async states
 - [x] Privacy-safe live booking activity + driver manual assignment
-- [x] Passenger open-pool discovery, atomic join, and full-capacity 409 feedback
+- [x] Driver-only manual assignment with atomic capacity enforcement; passenger requests remain unassigned until the driver selects them
 - [x] Driver add-to-pool flow, seat meter, lifecycle actions, roster, and event trail
 - [x] New driver signup provisions a default capacity-3 vehicle
 - [x] Frontend production build and repeatable smoke check
@@ -76,7 +76,7 @@ Some requirements were intentionally left open. These are the assumptions made, 
 4. **One active pool per vehicle at a time.** A vehicle's pool must reach `COMPLETED`/`CANCELLED` before a new one opens — keeps capacity accounting trivial and correct.
 5. **No real payment gateway.** Payment is Cash or a simulated **TeslaPay** wallet.
 6. **No map API.** Pickup/destination are a predefined list of Dhaka areas (`areas` table) with lat/lng centers; distance is computed with the Haversine formula between zone centers. This matches the brief's "keep geography simple" rule and keeps everything free and hand-testable.
-7. **Manual dispatch plus passenger joining:** passengers request rides first. A driver can manually select compatible waiting requests, and a passenger can join a compatible open pool from the passenger board. Both paths use the same atomic capacity guard; if the selected set or final-seat race exceeds capacity, the API returns `409 NO_SEATS` and the rejected request stays `REQUESTED`.
+7. **Driver-only manual dispatch:** passengers request rides first. A driver manually selects compatible waiting requests; passenger self-service joining is intentionally not exposed. The selected set uses the atomic capacity guard, and a rejected request stays `REQUESTED`.
 8. **New driver provisioning:** driver signup creates a default offline capacity-3 vehicle in the same database transaction as the user. Jashim's seeded vehicle remains the primary demo vehicle.
 
 ---
@@ -399,9 +399,9 @@ npm run build
 npm run test:smoke             # expects the local stack on :3000
 ```
 
-The smoke check verifies the rendered document, same-origin API rewrite, demo driver's manual-selection board, passenger history, privacy-safe activity, open-pool discovery, and capacity/joinability contracts. Browser walkthrough screenshots are in [`docs/screenshots/`](./docs/screenshots/).
+The smoke check verifies the rendered document, same-origin API rewrite, demo driver's manual-selection board, passenger history, and privacy-safe activity. Browser walkthrough screenshots are in [`docs/screenshots/`](./docs/screenshots/).
 
-Backend coverage includes capacity, transition guards, fare math, authorization, cancellation, concurrent last-seat manual assignments, passenger open-pool joins, driver provisioning, active-pool additions, privacy-safe activity, and deterministic full-capacity rejection.
+Backend coverage includes capacity, transition guards, fare math, authorization, cancellation, concurrent last-seat manual assignments, driver provisioning, active-pool additions, privacy-safe activity, and deterministic full-capacity rejection.
 
 ---
 
@@ -453,8 +453,6 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 | POST | `/driver/pools/:id/requests` | driver (owner) | manually add selected compatible passengers before arrival |
 | GET | `/driver/pools` | driver | my pools, passengers, seats, events |
 | POST | `/driver/pools/:id/arrived\|start\|complete\|cancel` | driver (owner) | guarded lifecycle → 409 on illegal move |
-| GET | `/pools/open` | passenger (own request) | privacy-safe open-pool capacity, route corridor, and compatible/joinable request IDs |
-| POST | `/pools/:id/join` | passenger (own request) | atomically join a compatible open pool; full/late join returns `409 NO_SEATS` |
 | GET | `/pools/:id` | driver or assigned member | roster + own fare only (`myFareTaka`) |
 | GET | `/health` | — | liveness (Docker healthcheck) |
 
@@ -481,7 +479,7 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 - No real payment gateway (Cash / simulated TeslaPay); the UI does not collect payment details.
 - Live status uses simple five-second polling rather than WebSockets/SSE.
 - JWTs are stateless and last seven days; there is no refresh-token or server-side revocation flow.
-- Passenger joining is limited to compatible open pools and their own `REQUESTED` ride; a production matcher would rank candidates and provide clearer ETA/route guarantees.
+- Passenger requests remain unassigned until a driver manually selects them; there is no passenger self-service pool-joining route.
 - The smoke test uses seeded demo accounts and does not replace a full browser test suite.
 
 ---

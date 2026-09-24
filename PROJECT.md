@@ -132,7 +132,7 @@ npm run build
 npm run test:smoke   # while the full stack is running on :3000
 ```
 
-The integration suite covers capacity, state transitions, fares, ownership/privacy, cancellation, concurrent last-seat claims, driver provisioning, active-pool additions, passenger open-pool joins, privacy-safe activity, and deterministic full-pool rejection.
+The integration suite covers capacity, state transitions, fares, ownership/privacy, cancellation, concurrent last-seat claims, driver provisioning, active-pool additions, privacy-safe activity, and deterministic full-pool rejection.
 
 Latest local verification:
 
@@ -140,7 +140,7 @@ Latest local verification:
 - [x] Frontend TypeScript typecheck and optimized Next.js build
 - [x] Disposable PostgreSQL integration suite: **46/46 tests passed**
 - [x] Full Compose stack: DB, API, and frontend all report healthy
-- [x] Frontend smoke: page render, same-origin rewrite, driver board, scoped history, private activity, and open-pool join capacity
+- [x] Frontend smoke: page render, same-origin rewrite, driver board, scoped history, and private activity
 - [ ] Public deployment smoke test (no public URL yet)
 - [ ] Recorded demo video (not yet created)
 

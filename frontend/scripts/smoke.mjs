@@ -126,6 +126,7 @@ assert(
   ),
   "open-pool capacity, joinability, or fare-privacy contract is invalid",
 );
+
 assert(
   Array.isArray(driverBoard?.requests) &&
     driverBoard.requests.every(
@@ -138,5 +139,5 @@ assert(
 );
 
 console.log(
-  "Frontend smoke passed: page, rewrite, driver board, scoped history, private activity, and open-pool join capacity.",
+  "Frontend smoke passed: page, rewrite, driver manual board, scoped history, private activity, and open-pool join capacity.",
 );
