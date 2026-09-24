@@ -111,26 +111,20 @@ assert(
   "live booking activity leaked a private field",
 );
 
-const retiredOpenPool = await fetch(`${baseUrl}/api/backend/pools/open`, {
+const openPools = await json("/api/backend/pools/open", {
   headers: { Authorization: `Bearer ${passengerLogin.token}` },
 });
+assert(Array.isArray(openPools?.pools), "open-pool contract is missing pools[]");
 assert(
-  retiredOpenPool.status === 404,
-  `passenger open-pool route should be disabled, received ${retiredOpenPool.status}`,
-);
-
-const passengerJoin = await fetch(`${baseUrl}/api/backend/pools/1/join`, {
-  method: "POST",
-  headers: {
-    Accept: "application/json",
-    Authorization: `Bearer ${passengerLogin.token}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({ requestId: 1 }),
-});
-assert(
-  passengerJoin.status === 404,
-  `passenger self-join route should be disabled, received ${passengerJoin.status}`,
+  openPools.pools.every(
+    (pool) =>
+      ["available", "last-seat", "full"].includes(pool.capacityState) &&
+      Array.isArray(pool.compatibleRequestIds) &&
+      Array.isArray(pool.joinableRequestIds) &&
+      !Object.prototype.hasOwnProperty.call(pool, "fareTaka") &&
+      !Object.prototype.hasOwnProperty.call(pool, "totalTaka"),
+  ),
+  "open-pool capacity, joinability, or fare-privacy contract is invalid",
 );
 
 assert(
@@ -145,5 +139,5 @@ assert(
 );
 
 console.log(
-  "Frontend smoke passed: page, rewrite, driver manual board, scoped history, private activity, and no passenger self-join.",
+  "Frontend smoke passed: page, rewrite, driver manual board, scoped history, private activity, and open-pool join capacity.",
 );

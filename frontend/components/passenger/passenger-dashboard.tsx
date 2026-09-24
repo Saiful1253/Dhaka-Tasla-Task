@@ -20,6 +20,7 @@ import {
 
 import { AppHeader } from "@/components/app-header";
 import { LiveBookingActivity } from "@/components/passenger/live-booking-activity";
+import { JoinPoolPanel } from "@/components/passenger/join-pool-panel";
 import { ManualAssignmentPanel } from "@/components/passenger/manual-assignment-panel";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -194,6 +195,29 @@ export function PassengerDashboard() {
     });
     return data.rides;
   }, []);
+
+  const handlePoolJoined = useCallback(
+    async (poolId: number) => {
+      try {
+        await refreshRides();
+        setPoolRefresh((value) => value + 1);
+        showToast({
+          tone: "success",
+          message: `You joined pool #${poolId}. Your seat is now held on the manifest.`,
+        });
+      } catch (error) {
+        showToast({
+          tone: "error",
+          message:
+            error instanceof Error
+              ? `The seat was joined, but the ride board could not refresh: ${error.message}`
+              : "The seat was joined, but the ride board could not refresh.",
+          code: getErrorCode(error),
+        });
+      }
+    },
+    [refreshRides, showToast],
+  );
 
   const pollRide = useCallback(
     async (rideId: number) => {
@@ -621,10 +645,10 @@ export function PassengerDashboard() {
                           <div>
                             <p className="eyebrow">Shared manifest</p>
                             <h3 id="pool-manifest-heading" className="mt-1 font-display text-lg font-bold tracking-[-0.035em]">
-                              Pool #{String(selectedRide.pool.id).padStart(3, "0")} ┬╖ {selectedPool?.vehicle ?? "Loading vehicle"}
+                              Pool #{String(selectedRide.pool.id).padStart(3, "0")} · {selectedPool?.vehicle ?? "Loading vehicle"}
                             </h3>
                             <p className="mt-1 text-xs text-ink/65">
-                              {selectedPool ? `${selectedPool.driver.name} is driving ┬╖ routes are shared, fares stay private.` : "Loading the rider-only manifest."}
+                              {selectedPool ? `${selectedPool.driver.name} is driving · routes are shared, fares stay private.` : "Loading the rider-only manifest."}
                             </p>
                           </div>
                           {selectedPool ? <StatusBadge status={selectedPool.status} compact /> : null}
@@ -674,10 +698,10 @@ export function PassengerDashboard() {
                                 <li key={member.requestId} className="flex items-center justify-between gap-3 py-2.5">
                                   <div className="min-w-0">
                                     <p className="truncate text-xs font-bold text-ink">
-                                      {member.passenger.name}{member.isMe ? " ┬╖ you" : ""}
+                                      {member.passenger.name}{member.isMe ? " · you" : ""}
                                     </p>
                                     <p className="mt-0.5 truncate font-mono text-[8px] uppercase tracking-[0.1em] text-ink/65">
-                                      {member.pickup} ΓåÆ {member.dest}
+                                      {member.pickup} → {member.dest}
                                     </p>
                                   </div>
                                   <span className="shrink-0 font-mono text-[9px] font-semibold text-ink/65">
@@ -703,7 +727,7 @@ export function PassengerDashboard() {
                         {isTerminalRide(selectedRide.status)
                           ? "This status is final. The trip is no longer polled."
                           : pollingNow
-                            ? "Checking the live status nowΓÇª"
+                            ? "Checking the live status now…"
                             : "Live status refreshes every 5 seconds."}
                       </p>
                       {canCancelSelected ? (
@@ -762,7 +786,7 @@ export function PassengerDashboard() {
                 </div>
                 <p className="flex items-center gap-2 font-mono text-[9px] font-semibold uppercase tracking-[0.13em] text-ink/65">
                   <CalendarDays aria-hidden="true" className="h-4 w-4" />
-                  {rides.length} {rides.length === 1 ? "ride" : "rides"} ┬╖ newest first
+                  {rides.length} {rides.length === 1 ? "ride" : "rides"} · newest first
                 </p>
               </div>
 
@@ -806,14 +830,14 @@ export function PassengerDashboard() {
                             </span>
                           </div>
                           <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.11em] text-ink/65">
-                            {formatDateTime(ride.createdAt)} ┬╖ {ride.seatsRequested}{" "}
+                            {formatDateTime(ride.createdAt)} · {ride.seatsRequested}{" "}
                             {ride.seatsRequested === 1 ? "seat" : "seats"}
                           </p>
                         </div>
                         <div className="flex items-center justify-between gap-4 sm:justify-end">
                           <StatusBadge status={ride.status} compact />
                           <p className="min-w-20 text-right font-mono text-base font-semibold tabular-nums text-ink">
-                            {ride.fare ? formatTaka(ride.fare.totalTaka) : "ΓÇö"}
+                            {ride.fare ? formatTaka(ride.fare.totalTaka) : "—"}
                           </p>
                         </div>
                       </button>

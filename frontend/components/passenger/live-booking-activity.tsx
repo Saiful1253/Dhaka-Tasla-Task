@@ -35,7 +35,7 @@ function activityLabel(activityId: string): string {
 /**
  * A deliberately separate read model for the passenger activity board. It
  * polls quietly, keeps the last good snapshot on transient failures, and never
- * owns a passenger assignment action.
+ * owns a join action.
  */
 export function LiveBookingActivity() {
   const [activity, setActivity] = useState<RideActivityResponse | null>(null);
@@ -101,9 +101,9 @@ export function LiveBookingActivity() {
   const requests = activity?.requests ?? [];
   const hasSnapshot = activity !== null;
   const statusText = loading
-    ? "Loading live booking activityΓÇª"
+    ? "Loading live booking activity…"
     : refreshing
-      ? "Refreshing live booking activityΓÇª"
+      ? "Refreshing live booking activity…"
       : error && hasSnapshot
         ? "Last refresh failed; showing the last snapshot"
         : error
@@ -229,7 +229,7 @@ export function LiveBookingActivity() {
                 <LoadingSkeleton className="mt-2 h-6 w-2/5" />
               </div>
             ))}
-            <span className="sr-only">Loading other passengersΓÇÖ live requestsΓÇª</span>
+            <span className="sr-only">Loading other passengers’ live requests…</span>
           </div>
         ) : null}
 
