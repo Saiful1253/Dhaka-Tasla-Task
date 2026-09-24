@@ -1,0 +1,13 @@
+# Never upload local credentials to Vercel
+.env
+.env.*
+!.env.example
+
+# Local/generated files
+.vercel
+node_modules
+dist
+coverage
+tests
+*.log
+*.tsbuildinfo
