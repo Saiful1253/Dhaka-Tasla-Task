@@ -4,6 +4,7 @@
 
 An MVP ride-pooling service for Dhaka where passengers can request a ride, share a 3-seat electric "Tesla" with compatible strangers, split the fare fairly, and the driver always knows who's riding and at what stage.
 
+Live Link: frontend-hazel-eta-btpcw9eq0e.vercel.app
 ---
 
 ## 📖 Table of Contents
