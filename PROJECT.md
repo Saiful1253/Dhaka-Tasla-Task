@@ -2,9 +2,9 @@ PRD source: https://docs.google.com/document/d/1JXwdweh9lJgKapQtvcGDF4Bg2GdTnuPx
 
 # Dhaka Tesla Pool
 
-A full-stack, Dockerized 3-seat ride-pooling MVP for Dhaka. Passengers request and track their own rides, compatible requests can share Bullet, individual fares remain private, and PostgreSQL enforces seat capacity atomically.
+A full-stack 3-seat ride-pooling MVP for Dhaka. Passengers request and track their own rides, compatible requests can share Bullet, individual fares remain private, and PostgreSQL enforces seat capacity atomically. The public path is Vercel + managed PostgreSQL; Docker is optional for local development and integration tests.
 
-> **Day 2 status:** core product work is implemented locally. Passenger request/status flows, privacy-safe live activity, driver-only assignment, the last-seat rejection edge case, integration hardening, Docker images, screenshots, and documentation are present. Public deployment, release branches/tag, and the six-minute video are still pending.
+> **Day 2 status:** core product work is implemented locally. Passenger request/status flows, privacy-safe live activity, driver-only assignment, the last-seat rejection edge case, integration hardening, Vercel-ready configuration, screenshots, and documentation are present. Public deployment, release branches/tag, and the six-minute video are still pending.
 
 ## Product status
 
@@ -21,7 +21,8 @@ A full-stack, Dockerized 3-seat ride-pooling MVP for Dhaka. Passengers request a
 - [x] Atomic seat claim plus database capacity `CHECK`
 - [x] One-active-pool-per-vehicle enforcement (API check + partial unique index)
 - [x] Next.js responsive UI with loading, error, empty, and full-capacity states
-- [x] PostgreSQL + API + frontend Docker Compose stack
+- [x] Vercel-ready frontend/API deployment with managed PostgreSQL
+- [x] Optional PostgreSQL + API + frontend Docker Compose stack
 - [x] Disposable integration-test database and frontend smoke script
 - [x] Architecture, ERD, setup, decisions, AI usage, screenshots, and scaling notes
 
@@ -34,7 +35,11 @@ A full-stack, Dockerized 3-seat ride-pooling MVP for Dhaka. Passengers request a
 
 ## Run the project
 
-### Docker (recommended)
+### Vercel + managed PostgreSQL (deployment path)
+
+See [`docs/vercel-deployment.md`](./docs/vercel-deployment.md). Docker is not required for deployment.
+
+### Optional local Docker stack
 
 ```bash
 docker compose up --build
@@ -80,11 +85,11 @@ All seeded accounts use password `tesla123`.
 
 ```text
 Browser
-  → Next.js 14 App Router (passenger + driver UI)
+  → Next.js 14 App Router (passenger + driver UI) on Vercel
   → same-origin /api/backend rewrite
-  → Express + TypeScript API
+  → Express + TypeScript API on Vercel
   → Prisma transaction / atomic seat claim
-  → PostgreSQL 17
+  → managed PostgreSQL
 ```
 
 No Redis, Kafka, Kubernetes, queue, map provider, or real payment gateway is used.
@@ -105,8 +110,9 @@ No Redis, Kafka, Kubernetes, queue, map provider, or real payment gateway is use
 │   ├── scripts/smoke.mjs    # production-shaped local smoke check
 │   └── Dockerfile
 ├── docs/screenshots/        # desktop and mobile product captures
-├── docker-compose.yml       # DB + API + frontend
-├── docker-compose.test.yml  # disposable PostgreSQL integration tests
+├── docker-compose.yml       # optional local DB + API + frontend
+├── docker-compose.test.yml  # optional disposable PostgreSQL integration tests
+├── docs/vercel-deployment.md # Vercel + managed PostgreSQL guide
 ├── read.md                  # PRD deep analysis
 ├── plan.md                  # 2-day plan and honest completion status
 ├── PROJECT.md               # project status and quick start

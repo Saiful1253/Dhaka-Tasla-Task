@@ -16,6 +16,7 @@
     "test:unit": "vitest run tests/unit.test.ts",
     "test:integration": "vitest run tests/pool.test.ts",
     "test:watch": "vitest",
+    "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",

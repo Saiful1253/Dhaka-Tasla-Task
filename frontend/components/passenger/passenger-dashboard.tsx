@@ -20,7 +20,6 @@ import {
 
 import { AppHeader } from "@/components/app-header";
 import { LiveBookingActivity } from "@/components/passenger/live-booking-activity";
-import { JoinPoolPanel } from "@/components/passenger/join-pool-panel";
 import { ManualAssignmentPanel } from "@/components/passenger/manual-assignment-panel";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -195,29 +194,6 @@ export function PassengerDashboard() {
     });
     return data.rides;
   }, []);
-
-  const handlePoolJoined = useCallback(
-    async (poolId: number) => {
-      try {
-        await refreshRides();
-        setPoolRefresh((value) => value + 1);
-        showToast({
-          tone: "success",
-          message: `You joined pool #${poolId}. Your seat is now held on the manifest.`,
-        });
-      } catch (error) {
-        showToast({
-          tone: "error",
-          message:
-            error instanceof Error
-              ? `The seat was joined, but the ride board could not refresh: ${error.message}`
-              : "The seat was joined, but the ride board could not refresh.",
-          code: getErrorCode(error),
-        });
-      }
-    },
-    [refreshRides, showToast],
-  );
 
   const pollRide = useCallback(
     async (rideId: number) => {

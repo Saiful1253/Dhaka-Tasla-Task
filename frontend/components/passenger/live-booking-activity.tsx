@@ -35,7 +35,7 @@ function activityLabel(activityId: string): string {
 /**
  * A deliberately separate read model for the passenger activity board. It
  * polls quietly, keeps the last good snapshot on transient failures, and never
- * owns a join action.
+ * owns a passenger assignment action.
  */
 export function LiveBookingActivity() {
   const [activity, setActivity] = useState<RideActivityResponse | null>(null);

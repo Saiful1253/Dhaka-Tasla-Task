@@ -1,6 +1,7 @@
 # 2-Day Build Plan — Dhaka Tesla Pool MVP
 
 > Derived from the PRD analysis in [`read.md`](./read.md).
+> **Deployment note:** the public path is Vercel + managed PostgreSQL; Docker is optional for local development and integration tests.
 > **Goal:** a complete, defensible MVP in 2 days — not a perfect one.
 > **Rule of the 2 days:** build only what you can *explain* in the video and interview.
 
@@ -420,10 +421,11 @@ payments(id, fare_id, method[cash|teslapay], status)                    -- simul
 - Commits: `fix(...)` as needed (real fix commits = good history)
 
 ## ⏱ 15:30 – 16:30 · Hour 14: Deployment
-- [x] Reproducible local deployment: `docker compose up --build` includes PostgreSQL, API, and frontend healthchecks
-- [x] Vercel-compatible frontend instructions + API/PostgreSQL deployment notes documented
+- [x] Vercel deployment path documented: separate frontend/API projects + managed PostgreSQL
+- [x] Prisma client generation configured for Vercel installs
+- [x] Optional reproducible local deployment: `docker compose up --build` includes PostgreSQL, API, and frontend healthchecks
 - [ ] Add a verified public deployment URL (requires deployment credentials/account; not fabricated)
-- Commits: `build(docker): add full-stack frontend service`, `docs(deploy): document deployment options`
+- Commits: `build(vercel): prepare frontend and API projects`, `docs(deploy): document deployment options`
 
 ## ⏱ 16:30 – 17:30 · Hour 15: README completion
 Must have all of these:

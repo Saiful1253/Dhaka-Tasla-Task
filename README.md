@@ -19,10 +19,11 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 - [Prerequisites](#-prerequisites)
 - [Environment Variables](#-environment-variables)
 - [Local Setup](#-local-setup)
-- [Docker Instructions](#-docker-instructions)
+- [Optional Docker Instructions](#-optional-docker-instructions)
 - [Running Tests](#-running-tests)
 - [Demo Credentials](#-demo-credentials)
 - [API Overview](#-api-overview)
+- [Deployment on Vercel](#-deployment-on-vercel)
 - [Key Decisions & Trade-offs](#-key-decisions--trade-offs)
 - [Known Limitations](#-known-limitations)
 - [Next Improvements](#-next-improvements)
@@ -37,7 +38,7 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 
 **Problem:** Nusrat wants Banani → Mohakhali, Rafiq wants Banani → Gulshan 1, and 30 seconds later Shirin wants the last seat. Jashim opens the initial pool, manually selects compatible passengers, and the server calculates each fare while preventing Bullet's 3 seats from being exceeded — even when two last-seat claims arrive at the exact same instant.
 
-> 🚧 **Status:** Day 2 — passenger and driver consoles, driver-only manual assignment, signup provisioning, live manifests, Docker frontend, smoke coverage, and release documentation are implemented locally. No public deployment or release tag has been fabricated.
+> 🚧 **Status:** Day 2 — passenger and driver consoles, driver-only manual assignment, signup provisioning, live manifests, Vercel-ready frontend/backend entry points, smoke coverage, and release documentation are implemented locally. No public deployment or release tag has been fabricated.
 
 ---
 
@@ -54,7 +55,7 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 - [x] Pooled lifecycle/cancellation audit trail (`ride_events`)
 - [x] Cancellation while in a valid state
 - [x] Seed data with the story cast
-- [x] Docker Compose setup for PostgreSQL, API, and frontend
+- [x] Optional Docker Compose setup for PostgreSQL, API, and frontend
 - [x] Tests (capacity, transitions, fare, authz, cancellation, concurrency, signup, and full-pool rejection)
 - [x] Next.js passenger and driver consoles with responsive async states
 - [x] Privacy-safe live booking activity + driver manual assignment
@@ -62,7 +63,7 @@ An MVP ride-pooling service for Dhaka where passengers can request a ride, share
 - [x] Driver add-to-pool flow, seat meter, lifecycle actions, roster, and event trail
 - [x] New driver signup provisions a default capacity-3 vehicle
 - [x] Frontend production build and repeatable smoke check
-- [x] Desktop/mobile screenshots and Docker/Vercel deployment preparation
+- [x] Desktop/mobile screenshots and Vercel + managed-PostgreSQL deployment preparation
 
 ---
 
@@ -101,8 +102,8 @@ flowchart LR
         T[("users · vehicles · areas\nride_requests · pools\npool_members · fares\nride_events · payments")]
     end
 
-    subgraph Ops["📦 Docker Compose"]
-        C0["Next.js frontend"] --> C1["Express API"] --> C2["PostgreSQL + healthchecks"]
+    subgraph Ops["☁️ Deployment options"]
+        C0["Vercel frontend"] --> C1["Vercel Express API"] --> C2["Managed PostgreSQL"]
     end
 
     UI -- "HTTPS · JSON (REST)" --> MW
@@ -265,7 +266,7 @@ passengerFare   = subtotal_taka - poolDiscount        // stored in whole Taka
 | Validation | Zod | Shared, typed request schemas |
 | Auth | JWT + bcrypt | Stateless, explainable |
 | Tests | Vitest + Supertest (against Dockerized Postgres) | Fast TS-native; real concurrency semantics |
-| Tooling | Docker Compose | One command bring-up |
+| Deployment | Vercel (frontend + Express) + managed PostgreSQL | Small public surface; Docker is optional for local tests |
 
 > Justification, alternatives, and "what would make me switch" for each: see [Key Decisions & Trade-offs](#-key-decisions--trade-offs).
 
@@ -298,8 +299,8 @@ passengerFare   = subtotal_taka - poolDiscount        // stored in whole Taka
 ## 📋 Prerequisites
 
 - Node.js ≥ 20 (frontend and backend)
-- Docker + Docker Compose (recommended reproducible stack)
-- (Optional) PostgreSQL 17 if running outside Docker
+- A managed PostgreSQL database (Vercel Postgres, Neon, Supabase, or equivalent)
+- Docker + Docker Compose only if using the optional local/test stack
 
 ---
 
@@ -322,7 +323,9 @@ NEXT_PUBLIC_API_URL=/api/backend
 
 ## 🚀 Local Setup
 
-### One-command local stack (recommended)
+### Optional one-command local stack
+
+Docker is not required for the Vercel deployment. Use this section only when you want a local PostgreSQL/API/frontend stack or the integration-test environment.
 
 ```bash
 cp .env.example .env                 # optional outside Docker; keep secrets local
@@ -359,7 +362,7 @@ Run `npm run typecheck` and `npm run build` in each app before sharing a build. 
 
 ---
 
-## 🐳 Docker Instructions
+## 🐳 Optional Docker Instructions
 
 ```bash
 docker compose up --build
@@ -421,7 +424,7 @@ Seeded by `npm run seed` (password for all: `tesla123`):
 
 ## 🔌 API Overview
 
-Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Errors: `{ "error": { "code", "message" } }`
+Base URL: local `http://localhost:4000` or the deployed Vercel API origin · Auth: `Authorization: Bearer <token>` · Errors: `{ "error": { "code", "message" } }`
 
 ### Auth
 | Method | Path | Auth | Description |
@@ -454,7 +457,7 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 | GET | `/driver/pools` | driver | my pools, passengers, seats, events |
 | POST | `/driver/pools/:id/arrived\|start\|complete\|cancel` | driver (owner) | guarded lifecycle → 409 on illegal move |
 | GET | `/pools/:id` | driver or assigned member | roster + own fare only (`myFareTaka`) |
-| GET | `/health` | — | liveness (Docker healthcheck) |
+| GET | `/health` | — | liveness (local/Docker or Vercel API) |
 
 ---
 
@@ -468,7 +471,7 @@ Base URL: `http://localhost:4000` · Auth: `Authorization: Bearer <token>` · Er
 | JWT (stateless) | Sessions in Redis | No extra infra for an MVP | Need instant revocation → server-side sessions |
 | Next.js App Router | Separate SPA + custom router | Typed routes, server-rendered shell, and a small deployable frontend | Need a non-React native client or heavy SSR personalization |
 | Same-origin `/api/backend` rewrite | Direct browser CORS API | Keeps auth and API calls same-origin in local Docker/Vercel | Need independent API domains with a deliberate CORS/CSRF design |
-| Docker Compose multi-stage images | Platform-specific deploy scripts | Reproducible API + frontend + Postgres healthchecks | Managed platform-specific pipelines become preferable at scale |
+| Vercel + managed PostgreSQL | Docker-only single-host deployment | Small deploy surface: two stateless app projects and an existing relational database; Docker stays available for local tests | The team needs a private network, custom runtime, or long-running workers |
 | Whole-Taka integer | DECIMAL/float | Exact math, no drift, trivially hand-verifiable | The product needs fractional-Taka fares |
 
 ---
@@ -500,28 +503,30 @@ The captures below are local, real product screenshots (no external image servic
 
 | Passenger flow | Driver dispatch |
 |---|---|
-| ![Passenger pooled manifest and private status](./docs/screenshots/passenger-pooled-desktop.png) | ![Driver manifest and seat meter](./docs/screenshots/driver-active-desktop.png) |
-| ![Passenger mobile pooled manifest](./docs/screenshots/passenger-pooled-mobile.png) | ![Driver mobile history](./docs/screenshots/driver-history-mobile.png) |
+| ![Passenger request awaiting driver selection](./docs/screenshots/passenger-request-desktop.png) | ![Driver manifest and seat meter](./docs/screenshots/driver-active-desktop.png) |
+| ![Passenger mobile assigned manifest](./docs/screenshots/passenger-pooled-mobile.png) | ![Driver mobile history](./docs/screenshots/driver-history-mobile.png) |
 
-Also captured: [auth desktop](./docs/screenshots/auth-desktop.png), [auth mobile](./docs/screenshots/auth-mobile.png), [passenger request desktop](./docs/screenshots/passenger-request-desktop.png), and [driver empty board desktop](./docs/screenshots/driver-empty-desktop.png). The files are intentionally committed as documentation assets; generated browser reports and local secrets remain ignored.
+Also captured: [auth desktop](./docs/screenshots/auth-desktop.png), [auth mobile](./docs/screenshots/auth-mobile.png), and [driver empty board desktop](./docs/screenshots/driver-empty-desktop.png). The files are intentionally committed as documentation assets; generated browser reports and local secrets remain ignored.
 
 ---
 
-## 🚀 Deployment Preparation
+## 🚀 Deployment on Vercel
 
-### Vercel-compatible frontend
+Docker is **not required** for the public deployment. Use two Vercel projects backed by one managed PostgreSQL database:
 
-1. Create a Vercel project with **Root Directory** set to `frontend`.
-2. Set `NEXT_PUBLIC_API_URL=/api/backend`.
-3. Set `BACKEND_API_URL` to the HTTPS API origin that is reachable from the Vercel build/runtime (the same-origin rewrite is compiled from this value).
-4. Deploy the API/PostgreSQL separately using the Docker instructions or a managed PostgreSQL provider. Set its `DATABASE_URL`, `JWT_SECRET`, and fare variables.
-5. Confirm `/health`, login, and `/api/backend/health` from the deployed frontend before sharing a URL.
+```text
+Browser → Next.js (frontend project) → /api/backend rewrite → Express (backend project) → PostgreSQL
+```
 
-No live Vercel/API URL is included because deployment credentials and a verified public deployment were not available in this environment. The configuration is prepared; the URL remains an honest TODO rather than a fabricated link.
+1. Create a managed PostgreSQL database (Vercel Postgres, Neon, Supabase, or equivalent) and set `DATABASE_URL` in the backend project. Use the provider's direct URL for the one-time migration if it supplies separate pooled/direct URLs.
+2. Create the backend Vercel project with **Root Directory** `backend`. Vercel detects the Express server at `backend/src/server.ts`; set `JWT_SECRET`, `NODE_ENV=production`, and the fare variables. Do not run migrations or seed on every serverless cold start.
+3. Apply the checked-in schema from a trusted shell: `cd backend && npm ci && npm run prisma:migrate`. Run `npm run seed` only for a demo database; the seeded `tesla123` accounts are not suitable for a real public deployment.
+4. Create the frontend Vercel project with **Root Directory** `frontend`. Set `BACKEND_API_URL` to the deployed API origin and keep `NEXT_PUBLIC_API_URL=/api/backend` so the Next.js same-origin rewrite avoids browser CORS configuration.
+5. Verify the API `https://YOUR-BACKEND.vercel.app/health`, frontend login, and the `/api/backend` proxy before sharing the URL.
 
-### Docker deployment
+The repository's Docker Compose files remain useful for local development and database-backed integration tests, but they are not part of the Vercel deployment path. Full step-by-step instructions are in [`docs/vercel-deployment.md`](./docs/vercel-deployment.md).
 
-`docker compose up --build -d` is the reproducible single-host deployment. Put a TLS-terminating reverse proxy in front of ports 3000/4000, use a managed secret for `JWT_SECRET`, restrict PostgreSQL exposure, and run migrations through the API container. For a clean host, clone the repository, create `.env` from `.env.example`, set secrets, and run the compose command; no generated `.next`, `node_modules`, database volume, or environment file is needed in source control.
+No live Vercel/API URL is included because deployment credentials and a verified public deployment were not available in this environment. The URL remains an honest TODO rather than a fabricated link.
 
 ---
 
@@ -553,7 +558,7 @@ flowchart LR
 
 ## 🤖 AI Usage
 
-OpenCode was used as the implementation assistant for repository inspection, API contract alignment, React/Next.js UI implementation, test fixtures, Docker configuration, and documentation drafting. I reviewed the changes and ran the checks listed above; the implementation remains grounded in the existing Express/Prisma architecture and local evidence.
+OpenCode was used as the implementation assistant for repository inspection, API contract alignment, React/Next.js UI implementation, test fixtures, Vercel deployment preparation, optional Docker configuration, and documentation drafting. I reviewed the changes and ran the checks listed above; the implementation remains grounded in the existing Express/Prisma architecture and local evidence.
 
 - **Accepted suggestion:** keep capacity enforcement in one atomic conditional database update and run the same transaction through membership/status/fare writes. This directly supports the last-seat race and avoids a misleading frontend-only guard.
 - **Rejected/changed suggestion:** do not add a map provider, WebSocket service, queue, or generic component library for this MVP. The brief explicitly values a simple area/corridor model and five-second polling, so those additions would increase infrastructure without improving the required evaluator story.
