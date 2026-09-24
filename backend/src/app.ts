@@ -29,3 +29,8 @@ export function createApp() {
 
   return app;
 }
+
+// Vercel's Express preset may discover this module directly as the server
+// entrypoint instead of api/index.ts. Keep a default Express export so both
+// discovery paths serve the same application.
+export default createApp();

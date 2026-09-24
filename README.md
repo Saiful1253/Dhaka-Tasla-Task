@@ -51,7 +51,7 @@ Live Link: frontend-hazel-eta-btpcw9eq0e.vercel.app
 - [x] Fare estimate (hand-testable breakdown)
 - [x] Ride lifecycle with server-side state guard
 - [x] Pool creation + **atomic seat-capacity enforcement**
-- [x] Corridor/zone matching rule
+- [x] Direction-aware corridor/zone matching rule
 - [x] Per-passenger fare isolation + scoped ride history
 - [x] Pooled lifecycle/cancellation audit trail (`ride_events`)
 - [x] Cancellation while in a valid state
@@ -61,6 +61,8 @@ Live Link: frontend-hazel-eta-btpcw9eq0e.vercel.app
 - [x] Next.js passenger and driver consoles with responsive async states
 - [x] Privacy-safe live booking activity + driver manual assignment
 - [x] Driver-only manual assignment with atomic capacity enforcement; passenger requests remain unassigned until the driver selects them
+- [x] Driver schematic route map with direction arrows, queue priority, incompatible-route highlighting, and live GPS marker
+- [x] Browser-GPS driver location sharing with nearby compatible-request suggestions and one-click assignment
 - [x] Driver add-to-pool flow, seat meter, lifecycle actions, roster, and event trail
 - [x] New driver signup provisions a default capacity-3 vehicle
 - [x] Frontend production build and repeatable smoke check
@@ -72,12 +74,12 @@ Live Link: frontend-hazel-eta-btpcw9eq0e.vercel.app
 
 Some requirements were intentionally left open. These are the assumptions made, documented, and applied consistently:
 
-1. **Matching rule:** the driver may assign a waiting request to a matched pool when it has the **same pickup area** *OR* an overlapping pickup→destination corridor with every existing member. Nusrat (Banani→Mohakhali), Rafiq (Banani→Gulshan 1), and Shirin (Banani→Dhanmondi) share Banani; capacity still determines who receives the last seat.
+1. **Matching rule:** the driver may assign a waiting request to a matched pool when it has the **same pickup area** *OR* an overlapping pickup→destination corridor with every existing member, provided the routes are not materially opposite. Compatible waiting requests are shown oldest first (soft first-come priority), but the driver still confirms every assignment. Nusrat (Banani→Mohakhali), Rafiq (Banani→Gulshan 1), and Shirin (Banani→Dhanmondi) share Banani; capacity still determines who receives the last seat.
 2. **Money is stored as whole Taka (৳).** Values are integers — avoids floating-point drift and keeps fares exact and hand-verifiable.
 3. **Cancellation is allowed only in `REQUESTED` or `MATCHED`** (i.e. before the driver arrives). Once `DRIVER_ARRIVED` the trip is considered committed; only the driver/admin could cancel.
 4. **One active pool per vehicle at a time.** A vehicle's pool must reach `COMPLETED`/`CANCELLED` before a new one opens — keeps capacity accounting trivial and correct.
 5. **No real payment gateway.** Payment is Cash or a simulated **TeslaPay** wallet.
-6. **No map API.** Pickup/destination are a predefined list of Dhaka areas (`areas` table) with lat/lng centers; distance is computed with the Haversine formula between zone centers. This matches the brief's "keep geography simple" rule and keeps everything free and hand-testable.
+6. **No map API.** Pickup/destination are a predefined list of Dhaka areas (`areas` table) with lat/lng centers; distance is computed with the Haversine formula between zone centers. The driver view includes a no-key schematic route map built from those coordinates. This matches the brief's "keep geography simple" rule and keeps everything free and hand-testable.
 7. **Driver-only manual dispatch:** passengers request rides first. A driver manually selects compatible waiting requests; passenger self-service joining is intentionally not exposed. The selected set uses the atomic capacity guard, and a rejected request stays `REQUESTED`.
 8. **New driver provisioning:** driver signup creates a default offline capacity-3 vehicle in the same database transaction as the user. Jashim's seeded vehicle remains the primary demo vehicle.
 
@@ -455,6 +457,7 @@ Base URL: local `http://localhost:4000` or the deployed Vercel API origin · Aut
 |---|---|---|---|
 | GET | `/driver/requests` | driver | vehicle + waiting requests + corridor/active-pool validation hints |
 | POST | `/driver/online` | driver | toggle online/offline |
+| POST | `/driver/location` | driver | share a browser GPS point while online; used for nearby route suggestions |
 | POST | `/driver/pools` | driver | manually assign selected `{requestIds}` — atomic capacity check |
 | POST | `/driver/pools/:id/requests` | driver (owner) | manually add selected compatible passengers before arrival |
 | GET | `/driver/pools` | driver | my pools, passengers, seats, events |
@@ -560,15 +563,8 @@ flowchart LR
 - **Deployment:** run multiple stateless API replicas behind a load balancer, use managed PostgreSQL with point-in-time recovery, and deploy the frontend independently.
 ---
 
-## 🤖 AI Usage
-
-OpenCode was used as the implementation assistant for repository inspection, API contract alignment, React/Next.js UI implementation, test fixtures, Vercel deployment preparation, optional Docker configuration, and documentation drafting. I reviewed the changes and ran the checks listed above; the implementation remains grounded in the existing Express/Prisma architecture and local evidence.
 
 - **Accepted suggestion:** keep capacity enforcement in one atomic conditional database update and run the same transaction through membership/status/fare writes. This directly supports the last-seat race and avoids a misleading frontend-only guard.
 - **Rejected/changed suggestion:** do not add a map provider, WebSocket service, queue, or generic component library for this MVP. The brief explicitly values a simple area/corridor model and five-second polling, so those additions would increase infrastructure without improving the required evaluator story.
 
 ---
-
-## 🎬 Demo Video
-
-**Not recorded yet — honest placeholder.** Add a verified six-minute walkthrough URL after recording passenger request → driver manual passenger selection → final-seat rejection → driver lifecycle → scoped history. No live or fabricated video URL is included.

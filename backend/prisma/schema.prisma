@@ -60,13 +60,16 @@ model User {
 }
 
 model Vehicle {
-  id        Int      @id @default(autoincrement())
-  driverId  Int      @map("driver_id")
-  name      String // e.g. "Bullet"
-  capacity  Int // seats - never exceeded (DB CHECK + atomic UPDATE)
-  plate     String?
-  isOnline  Boolean  @default(false) @map("is_online")
-  createdAt DateTime @default(now()) @map("created_at")
+  id                Int       @id @default(autoincrement())
+  driverId          Int       @map("driver_id")
+  name              String // e.g. "Bullet"
+  capacity          Int // seats - never exceeded (DB CHECK + atomic UPDATE)
+  plate             String?
+  isOnline          Boolean   @default(false) @map("is_online")
+  currentLat        Float?    @map("current_lat")
+  currentLng        Float?    @map("current_lng")
+  locationUpdatedAt DateTime? @map("location_updated_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
 
   driver User   @relation(fields: [driverId], references: [id], onDelete: Cascade)
   pools  Pool[]
@@ -88,18 +91,18 @@ model Area {
 }
 
 model RideRequest {
-  id             Int       @id @default(autoincrement())
-  passengerId    Int       @map("passenger_id")
-  pickupAreaId   Int       @map("pickup_area_id")
-  destAreaId     Int       @map("dest_area_id")
-  seatsRequested Int       @default(1) @map("seats_requested")
+  id             Int        @id @default(autoincrement())
+  passengerId    Int        @map("passenger_id")
+  pickupAreaId   Int        @map("pickup_area_id")
+  destAreaId     Int        @map("dest_area_id")
+  seatsRequested Int        @default(1) @map("seats_requested")
   status         RideStatus @default(REQUESTED)
-  createdAt      DateTime  @default(now()) @map("created_at")
-  deletedAt      DateTime? @map("deleted_at")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  deletedAt      DateTime?  @map("deleted_at")
 
-  passenger User      @relation(fields: [passengerId], references: [id], onDelete: Cascade)
-  pickupArea Area     @relation("pickupArea", fields: [pickupAreaId], references: [id])
-  destArea   Area     @relation("destArea", fields: [destAreaId], references: [id])
+  passenger  User @relation(fields: [passengerId], references: [id], onDelete: Cascade)
+  pickupArea Area @relation("pickupArea", fields: [pickupAreaId], references: [id])
+  destArea   Area @relation("destArea", fields: [destAreaId], references: [id])
 
   poolMembers PoolMember[]
   fare        Fare?
@@ -121,9 +124,9 @@ model Pool {
   startedAt   DateTime?  @map("started_at")
   completedAt DateTime?  @map("completed_at")
 
-  vehicle  Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  members  PoolMember[]
-  events   RideEvent[]
+  vehicle Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  members PoolMember[]
+  events  RideEvent[]
 
   // capacity guard lives in the UPDATE statement (atomic) + this CHECK as a second net
   @@index([status])
@@ -137,7 +140,7 @@ model PoolMember {
   poolId    Int      @map("pool_id")
   requestId Int      @unique @map("request_id")
   seats     Int      @default(1)
-  fareTaka Int      @map("fare_taka") // individual fare for this passenger
+  fareTaka  Int      @map("fare_taka") // individual fare for this passenger
   createdAt DateTime @default(now()) @map("created_at")
 
   pool    Pool        @relation(fields: [poolId], references: [id], onDelete: Cascade)
@@ -148,13 +151,13 @@ model PoolMember {
 }
 
 model Fare {
-  id            Int     @id @default(autoincrement())
-  requestId     Int     @unique @map("request_id")
-  baseTaka     Int     @map("base_taka")
-  distanceTaka Int     @map("distance_taka")
-  discountTaka Int     @default(0) @map("discount_taka")
-  totalTaka    Int     @map("total_taka") // whole Taka - no fractional values
-  distanceKm    Float   @map("distance_km")
+  id           Int   @id @default(autoincrement())
+  requestId    Int   @unique @map("request_id")
+  baseTaka     Int   @map("base_taka")
+  distanceTaka Int   @map("distance_taka")
+  discountTaka Int   @default(0) @map("discount_taka")
+  totalTaka    Int   @map("total_taka") // whole Taka - no fractional values
+  distanceKm   Float @map("distance_km")
 
   request RideRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   payment Payment?

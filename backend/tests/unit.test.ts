@@ -97,6 +97,24 @@ describe("matching rule", () => {
     ).toBe(true);
   });
 
+  it("rejects an exact reverse journey", () => {
+    expect(
+      areCompatible(
+        { pickup: banani, dest: mohakhali },
+        { pickup: mohakhali, dest: banani }
+      )
+    ).toBe(false);
+  });
+
+  it("rejects same-pickup journeys heading in opposite directions", () => {
+    expect(
+      areCompatible(
+        { pickup: banani, dest: mohakhali },
+        { pickup: banani, dest: uttara }
+      )
+    ).toBe(false);
+  });
+
   it("faraway trips do not pool (Uttara vs Banani)", () => {
     expect(
       areCompatible(

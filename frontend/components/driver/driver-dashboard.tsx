@@ -8,6 +8,7 @@ import {
   CircleDot,
   Clock3,
   Layers3,
+  LocateFixed,
   MapPin,
   Radio,
   RefreshCw,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { AppHeader } from "@/components/app-header";
+import { DriverRouteMap } from "@/components/driver/driver-route-map";
 import { PoolCard, type PoolAction } from "@/components/driver/pool-card";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -42,6 +44,10 @@ import {
   normalizeDriverPool,
 } from "@/lib/api/types";
 import { formatAge, formatTaka } from "@/lib/format";
+import {
+  useDriverLocation,
+  type DriverLocationStatus,
+} from "@/hooks/use-driver-location";
 import { useAuth } from "@/providers/auth-provider";
 
 interface RequestsResponse {
@@ -68,6 +74,23 @@ interface HistoryDeleteResponse {
   deletedCount: number;
 }
 
+function getLocationStatusLabel(status: DriverLocationStatus): string {
+  switch (status) {
+    case "active":
+      return "Location sharing active";
+    case "requesting":
+      return "Requesting GPS permission";
+    case "denied":
+      return "GPS permission denied";
+    case "unsupported":
+      return "GPS unavailable";
+    case "error":
+      return "GPS needs attention";
+    default:
+      return "Location sharing is off";
+  }
+}
+
 const ACTION_TOAST: Record<Exclude<PoolAction, "cancel">, string> = {
   arrived: "Driver-arrived status saved. The next step is starting the ride.",
   start: "Ride started. Every passenger can now follow the in-motion status.",
@@ -77,7 +100,7 @@ const ACTION_TOAST: Record<Exclude<PoolAction, "cancel">, string> = {
 function getActionErrorTitle(error: unknown): string {
   switch (getErrorCode(error)) {
     case "INCOMPATIBLE":
-      return "Requests do not share a corridor";
+      return "Opposite direction or different corridor";
     case "NO_SEATS":
       return "Not enough seats for this selection";
     case "VEHICLE_OFFLINE":
@@ -134,6 +157,11 @@ export function DriverDashboard() {
   const [deletePool, setDeletePool] = useState<DriverPool | null>(null);
   const [deleteAllHistoryOpen, setDeleteAllHistoryOpen] = useState(false);
   const [deletingHistory, setDeletingHistory] = useState(false);
+  const locationSharing = useDriverLocation(Boolean(vehicle?.isOnline));
+  const suggestedRequest = useMemo(
+    () => requests.find((request) => request.compatibility.suggested) ?? null,
+    [requests]
+  );
 
   const activePools = useMemo(
     () => pools.filter((pool) => !isTerminalPool(pool.status)),
@@ -158,7 +186,7 @@ export function DriverDashboard() {
         return `Pool #${activePool.id} is past the matching stage`;
       }
       if (!request.compatibility.fitsActivePool) {
-        return "Different corridor from the active pool";
+        return "Opposite direction or different corridor from the active pool";
       }
       if (
         request.seats >
@@ -176,7 +204,9 @@ export function DriverDashboard() {
         (!selected.compatibility.compatibleRequestIds.includes(request.id) ||
           !request.compatibility.compatibleRequestIds.includes(selected.id)),
     );
-    return breaksPairing ? "Does not share this selection's corridor" : null;
+    return breaksPairing
+      ? "Opposite direction or different corridor from this selection"
+      : null;
   }
 
   const applyBoard = useCallback(
@@ -311,6 +341,43 @@ export function DriverDashboard() {
         message: activePool
           ? `${selectedCount} passenger(s) manually added to pool #${data.pool.id}; capacity is now ${data.pool.seatsTaken}/${activePool.capacity}.`
           : `Passengers assigned to pool #${data.pool.id} after your manual selection.`,
+      });
+    } catch (error) {
+      setActionError(error);
+    } finally {
+      setActionPending(null);
+    }
+
+    await refreshAfterMutation();
+  }
+
+  async function handleAssignSuggested() {
+    if (!suggestedRequest || !vehicle?.isOnline || actionPending) return;
+    if (
+      activePool &&
+      (activePool.status !== "MATCHED" ||
+        suggestedRequest.seats > Math.max(0, activePool.capacity - activePool.seatsTaken))
+    ) {
+      return;
+    }
+
+    setActionPending("suggested");
+    setActionError(null);
+    try {
+      const data = await apiFetch<{ pool: { id: number; seatsTaken: number } }>(
+        activePool ? `/driver/pools/${activePool.id}/requests` : "/driver/pools",
+        {
+          method: "POST",
+          auth: true,
+          body: { requestIds: [suggestedRequest.id] },
+        }
+      );
+      setSelectedIds(new Set());
+      showToast({
+        tone: "success",
+        message: activePool
+          ? `Suggested request added to pool #${data.pool.id}; capacity is now ${data.pool.seatsTaken}/${activePool.capacity}.`
+          : `Suggested request assigned to new pool #${data.pool.id}.`,
       });
     } catch (error) {
       setActionError(error);
@@ -558,6 +625,42 @@ export function DriverDashboard() {
                   />
                 </div>
 
+                <div className="mt-5 border border-porcelain/15 bg-porcelain/5 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <LocateFixed aria-hidden="true" className="h-4 w-4 shrink-0 text-cyan" />
+                      <div className="min-w-0">
+                        <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.14em] text-cyan/70">
+                          Driver location
+                        </p>
+                        <p className="mt-1 truncate text-xs font-semibold text-porcelain/80">
+                          {getLocationStatusLabel(locationSharing.status)}
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={locationSharing.enableLocation}
+                      loading={locationSharing.status === "requesting"}
+                      disabled={!vehicle?.isOnline || Boolean(actionPending)}
+                      className="shrink-0 border-porcelain/20 bg-porcelain/10 text-porcelain hover:bg-porcelain/20"
+                    >
+                      {locationSharing.status === "active" ? "Refresh" : "Enable"}
+                    </Button>
+                  </div>
+                  {locationSharing.lastUpdatedAt && locationSharing.status === "active" ? (
+                    <p className="mt-2 font-mono text-[8px] uppercase tracking-[0.12em] text-cyan/55">
+                      Updated {new Date(locationSharing.lastUpdatedAt).toLocaleTimeString()}
+                    </p>
+                  ) : null}
+                  {locationSharing.error ? (
+                    <p className="mt-2 text-[11px] leading-4 text-coral" role="status">
+                      {locationSharing.error}
+                    </p>
+                  ) : null}
+                </div>
+
                 <Button
                   size="lg"
                   variant={vehicle?.isOnline ? "secondary" : "lime"}
@@ -590,7 +693,7 @@ export function DriverDashboard() {
                     <p className="mt-2 text-sm leading-6 text-ink/65">
                       {activePool
                         ? `Select passengers you want to add to pool #${activePool.id}. Nothing is assigned until you confirm.`
-                        : "Check one or more passenger requests, then confirm. No passenger is assigned or pooled automatically."}
+                        : "Oldest requests appear first. Check one or more passenger requests, then confirm. No passenger is assigned or pooled automatically."}
                     </p>
                   </div>
                   <div className="shrink-0 border border-ink/10 bg-porcelain px-3 py-2 text-right">
@@ -598,6 +701,45 @@ export function DriverDashboard() {
                     <p className="mt-0.5 font-display text-2xl font-bold tracking-[-0.05em]">{requests.length}</p>
                   </div>
                 </div>
+
+                {suggestedRequest ? (
+                  <div className="border-b border-lime/35 bg-lime/10 p-4 sm:p-5">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <LocateFixed aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-ink" />
+                        <div className="min-w-0">
+                          <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.15em] text-ink/65">
+                            Suggested match
+                          </p>
+                          <p className="mt-1 truncate font-display text-base font-bold text-ink">
+                            {suggestedRequest.passenger.name} · {suggestedRequest.pickup} → {suggestedRequest.dest}
+                          </p>
+                          <p className="mt-1 text-xs leading-5 text-ink/65">
+                            {suggestedRequest.compatibility.driverDistanceKm !== null
+                              ? `${suggestedRequest.compatibility.driverDistanceKm.toFixed(2)} km from your GPS point · compatible corridor`
+                              : "Compatible corridor near your current location"}
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        variant="lime"
+                        size="sm"
+                        onClick={() => void handleAssignSuggested()}
+                        loading={actionPending === "suggested"}
+                        disabled={Boolean(actionPending) || !vehicle?.isOnline}
+                        className="shrink-0"
+                      >
+                        {activePool ? "Add to pool" : "Assign now"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : locationSharing.status === "active" && vehicle?.isOnline ? (
+                  <div className="border-b border-ink/10 bg-paper/70 px-5 py-3">
+                    <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.13em] text-ink/60">
+                      No nearby compatible request right now. Older requests remain first in the queue.
+                    </p>
+                  </div>
+                ) : null}
 
                 {requests.length === 0 ? (
                   <EmptyState
@@ -755,11 +897,18 @@ export function DriverDashboard() {
                             : "Select at least one passenger to create the manifest."
                           : selectedOverCapacity
                             ? `This selection needs ${selectedSeats} seats; only ${availableCapacity} can be added to the current manifest.`
-                            : `${selectedIds.size} passenger${selectedIds.size === 1 ? "" : "s"} selected. Confirm to assign; the API then checks corridor and capacity.`}
+                            : `${selectedIds.size} passenger${selectedIds.size === 1 ? "" : "s"} selected. Confirm to assign; the API then checks direction, corridor, and capacity.`}
                   </p>
                 </div>
               </section>
             </div>
+
+            <DriverRouteMap
+              requests={requests}
+              selectedIds={selectedIds}
+              activePool={activePool}
+              driverLocation={vehicle?.location ?? locationSharing.location}
+            />
 
             <section aria-labelledby="active-pools-heading">
               <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">

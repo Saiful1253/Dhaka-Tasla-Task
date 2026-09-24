@@ -1,43 +1,202 @@
 import { config } from "../config";
 import { haversineKm } from "./geo";
 
+export interface RoutePoint {
+  lat: number;
+  lng: number;
+}
+
 export interface TripEnds {
-  pickup: { lat: number; lng: number };
-  dest: { lat: number; lng: number };
+  pickup: RoutePoint;
+  dest: RoutePoint;
+}
+
+/** Metadata is optional so the matcher stays easy to use in pure unit tests. */
+export interface RoutePlanRequest extends TripEnds {
+  id?: number;
+  createdAt?: Date;
+}
+
+const MIN_DIRECTION_VECTOR_LENGTH = 1e-9;
+
+function routeVector(trip: TripEnds): RoutePoint {
+  // A local equirectangular projection is sufficient for Dhaka's small area
+  // and avoids introducing a map/routing dependency.
+  const midpointLat =
+    ((trip.pickup.lat + trip.dest.lat) / 2) * (Math.PI / 180);
+  return {
+    lat: trip.dest.lat - trip.pickup.lat,
+    lng: (trip.dest.lng - trip.pickup.lng) * Math.cos(midpointLat),
+  };
+}
+
+function directionAngleDifference(a: TripEnds, b: TripEnds): number {
+  const first = routeVector(a);
+  const second = routeVector(b);
+  const firstLength = Math.hypot(first.lng, first.lat);
+  const secondLength = Math.hypot(second.lng, second.lat);
+
+  // There is no reliable heading for a zero-length route. Ride validation
+  // normally prevents this, but treating it as non-opposite keeps the matcher
+  // safe for malformed or legacy data.
+  if (
+    firstLength < MIN_DIRECTION_VECTOR_LENGTH ||
+    secondLength < MIN_DIRECTION_VECTOR_LENGTH
+  ) {
+    return 0;
+  }
+
+  const firstAngle = Math.atan2(first.lat, first.lng);
+  const secondAngle = Math.atan2(second.lat, second.lng);
+  const difference =
+    Math.abs(firstAngle - secondAngle) * (180 / Math.PI);
+  return Math.min(difference, 360 - difference);
+}
+
+function pointDistance(a: RoutePoint, b: RoutePoint): number {
+  return haversineKm(a.lat, a.lng, b.lat, b.lng);
+}
+
+function samePickup(a: TripEnds, b: TripEnds): boolean {
+  return a.pickup.lat === b.pickup.lat && a.pickup.lng === b.pickup.lng;
+}
+
+export function areOppositeDirections(a: TripEnds, b: TripEnds): boolean {
+  return (
+    directionAngleDifference(a, b) >= config.matching.oppositeDirectionAngleDeg
+  );
 }
 
 /**
- * MATCHING RULE (documented + applied consistently, PRD section 4):
+ * A safe handoff is the important new case:
  *
- *   Two ride requests may share a Tesla if EITHER
- *     (a) they have the same pickup area, OR
- *     (b) their pickups are within `pickupRadiusKm` AND their destinations
- *         are within `destRadiusKm` (overlapping-but-not-identical routes).
+ *   Banani -> Uttara, then Uttara -> Mirpur
  *
- * Story check: Nusrat (Banani→Mohakhali) and Rafiq (Banani→Gulshan 1) share
- * pickup area Banani => compatible. Shirin (Banani→Dhanmondi) also shares the
- * pickup area, but is bounded by Bullet's remaining seats.
+ * The two route headings can differ sharply at the handoff, but the second
+ * pickup is exactly where the first route ends. We allow that turn while
+ * rejecting a route that immediately returns to the previous pickup.
+ */
+function isSafeHandoff(previous: TripEnds, next: TripEnds): boolean {
+  const handoffDistance = pointDistance(previous.dest, next.pickup);
+  if (handoffDistance > config.matching.routeHandoffRadiusKm) return false;
+
+  // Do not turn a chain into an immediate backtrack (for example,
+  // Banani -> Uttara, then Uttara -> Banani).
+  const returnDistance = pointDistance(previous.pickup, next.dest);
+  return returnDistance > config.matching.routeHandoffRadiusKm;
+}
+
+/** True when two requests can travel together on the same leg. */
+export function areParallelRoutes(a: TripEnds, b: TripEnds): boolean {
+  if (areOppositeDirections(a, b)) return false;
+  return (
+    pointDistance(a.pickup, b.pickup) <= config.matching.pickupRadiusKm &&
+    pointDistance(a.dest, b.dest) <= config.matching.destRadiusKm
+  );
+}
+
+/**
+ * Two requests are compatible when they can share one ordered route plan:
+ *   - they travel on the same/overlapping leg, or
+ *   - one starts where the other ends (a safe handoff).
+ *
+ * The old same-pickup exception remains for non-opposite trips so existing
+ * corridor sharing remains deterministic. The ordered-plan check below is the
+ * final authority when several requests are assigned together.
  */
 export function areCompatible(a: TripEnds, b: TripEnds): boolean {
-  const { pickupRadiusKm, destRadiusKm } = config.matching;
+  if (isSafeHandoff(a, b) || isSafeHandoff(b, a)) return true;
+  if (areOppositeDirections(a, b)) return false;
+  if (samePickup(a, b)) return true;
+  return areParallelRoutes(a, b);
+}
 
-  // (a) identical pickup point (same predefined area center). This deliberately
-  // keeps the Banani pickup story compatible even when final stops diverge.
-  if (
-    a.pickup.lat === b.pickup.lat &&
-    a.pickup.lng === b.pickup.lng
-  ) {
-    return true;
+function routeTimestamp(route: RoutePlanRequest): number | null {
+  if (!route.createdAt) return null;
+  const value =
+    route.createdAt instanceof Date
+      ? route.createdAt.getTime()
+      : new Date(route.createdAt).getTime();
+  return Number.isFinite(value) ? value : null;
+}
+
+function compareRoutePriority(
+  first: { route: RoutePlanRequest; index: number },
+  second: { route: RoutePlanRequest; index: number },
+): number {
+  const firstTime = routeTimestamp(first.route);
+  const secondTime = routeTimestamp(second.route);
+  if (firstTime !== null && secondTime !== null && firstTime !== secondTime) {
+    return firstTime - secondTime;
+  }
+  if (typeof first.route.id === "number" && typeof second.route.id === "number") {
+    return first.route.id - second.route.id;
+  }
+  return first.index - second.index;
+}
+
+/**
+ * Find a valid order for a set of routes. Routes are tried oldest-first, so a
+ * route plan naturally anchors on the first request while still allowing a
+ * later request to continue from an earlier destination.
+ *
+ * The search is small because a vehicle pool has a small seat capacity. It
+ * avoids making a greedy choice that could strand a valid chain.
+ */
+export function buildRoutePlan<T extends RoutePlanRequest>(
+  routes: T[],
+  start?: RoutePoint,
+): T[] | null {
+  if (routes.length === 0) return [];
+
+  const prepared = routes
+    .map((route, index) => ({ route, index }))
+    .sort(compareRoutePriority);
+  const memo = new Set<string>();
+
+  function search(
+    remaining: Array<{ route: T; index: number }>,
+    previousIndex: number | null,
+  ): T[] | null {
+    if (remaining.length === 0) return [];
+
+    const key = `${previousIndex ?? "start"}:${remaining
+      .map((candidate) => candidate.index)
+      .join(",")}`;
+    if (memo.has(key)) return null;
+
+    for (const candidate of remaining) {
+      if (
+        previousIndex !== null &&
+        !areCompatible(prepared[previousIndex].route, candidate.route)
+      ) {
+        continue;
+      }
+      if (
+        previousIndex === null &&
+        start &&
+        pointDistance(start, candidate.route.pickup) > config.matching.pickupRadiusKm
+      ) {
+        continue;
+      }
+
+      const nextRemaining = remaining.filter(
+        (other) => other.index !== candidate.index
+      );
+      const tail = search(nextRemaining, candidate.index);
+      if (tail) return [candidate.route, ...tail];
+    }
+
+    memo.add(key);
+    return null;
   }
 
-  // (b) nearby pickups AND nearby destinations
-  const pickupDist = haversineKm(
-    a.pickup.lat,
-    a.pickup.lng,
-    b.pickup.lat,
-    b.pickup.lng
-  );
-  const destDist = haversineKm(a.dest.lat, a.dest.lng, b.dest.lat, b.dest.lng);
+  return search(prepared, null);
+}
 
-  return pickupDist <= pickupRadiusKm && destDist <= destRadiusKm;
+export function canBuildRoutePlan(
+  routes: RoutePlanRequest[],
+  start?: RoutePoint,
+): boolean {
+  return buildRoutePlan(routes, start) !== null;
 }

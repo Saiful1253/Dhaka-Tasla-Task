@@ -102,6 +102,9 @@ beforeEach(async () => {
   // disposable database and story accounts remain stable for the whole file.
   await prisma.pool.deleteMany({});
   await prisma.rideRequest.deleteMany({});
+  await prisma.vehicle.updateMany({
+    data: { currentLat: null, currentLng: null, locationUpdatedAt: null },
+  });
 });
 
 afterAll(async () => {
@@ -471,6 +474,97 @@ describe("6. Two concurrent manual assignments can't corrupt pool capacity", () 
     });
     expect(matched).toBe(1);
     expect(stillWaiting).toBe(1);
+  });
+
+  it("rejects opposite-direction trips before creating a pool", async () => {
+    await prisma.rideRequest.deleteMany({});
+    await prisma.pool.deleteMany({});
+
+    const forward = await makeRide(nusratToken, bananiId, mohakhaliId, 1);
+    const reverse = await makeRide(rafiqToken, mohakhaliId, bananiId, 1);
+
+    const open = await request(app)
+      .post("/driver/pools")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ requestIds: [forward.id, reverse.id] });
+
+    expect(open.status).toBe(409);
+    expect(open.body.error.code).toBe("INCOMPATIBLE");
+    expect(await prisma.pool.count()).toBe(0);
+    expect(
+      await prisma.rideRequest.count({
+        where: { id: { in: [forward.id, reverse.id] }, status: "REQUESTED" },
+      })
+    ).toBe(2);
+  });
+
+  it("lists waiting requests oldest first for soft priority", async () => {
+    await prisma.rideRequest.deleteMany({});
+    await prisma.pool.deleteMany({});
+
+    const older = await makeRide(nusratToken, bananiId, mohakhaliId, 1);
+    const newer = await makeRide(rafiqToken, bananiId, gulshan1Id, 1);
+    await prisma.rideRequest.update({
+      where: { id: older.id },
+      data: { createdAt: new Date("2026-01-01T10:00:00.000Z") },
+    });
+    await prisma.rideRequest.update({
+      where: { id: newer.id },
+      data: { createdAt: new Date("2026-01-01T11:00:00.000Z") },
+    });
+
+    const board = await request(app)
+      .get("/driver/requests")
+      .set("Authorization", `Bearer ${jashimToken}`);
+
+    expect(board.status).toBe(200);
+    expect(board.body.requests.map((item: { id: number }) => item.id)).toEqual([
+      older.id,
+      newer.id,
+    ]);
+    expect(
+      board.body.requests.every(
+        (item: { status: string }) => item.status === "REQUESTED",
+      )
+    ).toBe(true);
+  });
+
+  it("stores driver GPS and suggests the oldest nearby compatible request", async () => {
+    const location = await request(app)
+      .post("/driver/location")
+      .set("Authorization", `Bearer ${jashimToken}`)
+      .send({ lat: 23.7937, lng: 90.4066 });
+    expect(location.status).toBe(200);
+    expect(location.body.location.lat).toBeCloseTo(23.7937);
+
+    const older = await makeRide(nusratToken, bananiId, mohakhaliId, 1);
+    const newer = await makeRide(rafiqToken, bananiId, gulshan1Id, 1);
+    await prisma.rideRequest.update({
+      where: { id: older.id },
+      data: { createdAt: new Date("2026-01-01T10:00:00.000Z") },
+    });
+    await prisma.rideRequest.update({
+      where: { id: newer.id },
+      data: { createdAt: new Date("2026-01-01T11:00:00.000Z") },
+    });
+
+    const board = await request(app)
+      .get("/driver/requests")
+      .set("Authorization", `Bearer ${jashimToken}`);
+    expect(board.status).toBe(200);
+    expect(board.body.vehicle.location.lat).toBeCloseTo(23.7937);
+    expect(board.body.vehicle.location.lng).toBeCloseTo(90.4066);
+
+    const suggested = board.body.requests.find(
+      (item: { id: number }) => item.id === older.id,
+    );
+    const other = board.body.requests.find(
+      (item: { id: number }) => item.id === newer.id,
+    );
+    expect(suggested.compatibility.suggested).toBe(true);
+    expect(suggested.compatibility.suggestionReason).toBe("NEAR_DRIVER");
+    expect(suggested.compatibility.nearDriver).toBe(true);
+    expect(other.compatibility.suggested).toBe(false);
   });
 
   it("faraway trips are rejected by the matching rule", async () => {

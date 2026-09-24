@@ -10,6 +10,8 @@ import { prisma, interactiveTransactionOptions } from "../lib/prisma";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { errors } from "../lib/errors";
 import { areCompatible } from "../lib/matching";
+import { haversineKm } from "../lib/geo";
+import { config } from "../config";
 import { recalculatePoolFaresTx } from "../lib/pool-fares";
 import { assertPoolTransition } from "../lib/transitions";
 
@@ -80,6 +82,10 @@ const openPoolSchema = z.object({
     .transform((ids) => [...new Set(ids)]),
 });
 const addRequestsSchema = openPoolSchema;
+const driverLocationSchema = z.object({
+  lat: z.number().finite().min(-90).max(90),
+  lng: z.number().finite().min(-180).max(180),
+});
 const TERMINAL_POOL_STATUSES = ["COMPLETED", "CANCELLED"] as const;
 
 function assertPoolHistoryDeletable(status: string): void {
@@ -115,7 +121,9 @@ driverRouter.get("/requests", async (req, res, next) => {
           destArea: true,
           fare: true,
         },
-        orderBy: { createdAt: "asc" },
+        // Soft first-come priority: the oldest compatible request is shown
+        // first, while the driver remains in control of the final selection.
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       }),
       prisma.pool.findFirst({
         where: {
@@ -137,6 +145,45 @@ driverRouter.get("/requests", async (req, res, next) => {
     const remainingSeats = activePool
       ? Math.max(0, activePool.capacity - activePool.seatsTaken)
       : vehicle.capacity;
+    const driverLocation =
+      vehicle.currentLat !== null && vehicle.currentLng !== null
+        ? {
+            lat: vehicle.currentLat,
+            lng: vehicle.currentLng,
+            updatedAt: vehicle.locationUpdatedAt?.toISOString() ?? null,
+          }
+        : null;
+
+    const distanceToDriver = (pickup: { lat: number; lng: number }) =>
+      driverLocation
+        ? Number(
+            haversineKm(
+              driverLocation.lat,
+              driverLocation.lng,
+              pickup.lat,
+              pickup.lng
+            ).toFixed(2)
+          )
+        : null;
+
+    // The queue is already oldest-first. Pick the first nearby request that
+    // can also fit the active corridor, then expose it as a one-click suggestion.
+    const suggestedRequestId =
+      vehicle.isOnline && driverLocation
+        ? open.find((request) => {
+            const distance = distanceToDriver(request.pickupArea);
+            const fitsActivePool = activePool
+              ? requestsShareCorridor([...activeRoutes, request])
+              : true;
+            return (
+              distance !== null &&
+              distance <= config.matching.pickupRadiusKm &&
+              request.seatsRequested <= remainingSeats &&
+              (!activePool || activePool.status === "MATCHED") &&
+              fitsActivePool
+            );
+          })?.id ?? null
+        : null;
 
     res.json({
       vehicle: {
@@ -144,16 +191,23 @@ driverRouter.get("/requests", async (req, res, next) => {
         name: vehicle.name,
         capacity: vehicle.capacity,
         isOnline: vehicle.isOnline,
+        location: driverLocation,
       },
       requests: open.map((r) => {
         const fitsActivePool = activePool
           ? requestsShareCorridor([...activeRoutes, r])
           : null;
+        const driverDistanceKm = distanceToDriver(r.pickupArea);
+        const nearDriver =
+          driverDistanceKm !== null &&
+          driverDistanceKm <= config.matching.pickupRadiusKm;
         return {
           id: r.id,
           passenger: r.passenger,
           pickup: r.pickupArea.name,
           dest: r.destArea.name,
+          pickupLocation: { lat: r.pickupArea.lat, lng: r.pickupArea.lng },
+          destLocation: { lat: r.destArea.lat, lng: r.destArea.lng },
           seats: r.seatsRequested,
           status: r.status,
           estimatedFareTaka: r.fare?.totalTaka ?? null,
@@ -171,6 +225,15 @@ driverRouter.get("/requests", async (req, res, next) => {
               .filter((other) => other.id !== r.id)
               .filter((other) => areCompatible(tripEnds(r), tripEnds(other)))
               .map((other) => other.id),
+            driverDistanceKm,
+            nearDriver,
+            suggested: r.id === suggestedRequestId,
+            suggestionReason:
+              r.id === suggestedRequestId
+                ? activePool
+                  ? "MATCHES_ACTIVE_POOL"
+                  : "NEAR_DRIVER"
+                : null,
           },
         };
       }),
@@ -189,9 +252,46 @@ driverRouter.post("/online", async (req, res, next) => {
     if (!vehicle) throw errors.notFound("Vehicle");
     const updated = await prisma.vehicle.update({
       where: { id: vehicle.id },
-      data: { isOnline: !vehicle.isOnline },
+      data: {
+        isOnline: !vehicle.isOnline,
+        ...(vehicle.isOnline
+          ? { currentLat: null, currentLng: null, locationUpdatedAt: null }
+          : {}),
+      },
     });
     res.json({ isOnline: updated.isOnline });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** POST /driver/location - share a browser GPS point while the vehicle is online */
+driverRouter.post("/location", async (req, res, next) => {
+  try {
+    const location = driverLocationSchema.parse(req.body);
+    const vehicle = await prisma.vehicle.findFirst({
+      where: { driverId: req.user!.id },
+    });
+    if (!vehicle) throw errors.notFound("Vehicle");
+    if (!vehicle.isOnline) {
+      throw errors.conflict(
+        "VEHICLE_OFFLINE",
+        "Go online before sharing your location"
+      );
+    }
+
+    const locationUpdatedAt = new Date();
+    await prisma.vehicle.update({
+      where: { id: vehicle.id },
+      data: {
+        currentLat: location.lat,
+        currentLng: location.lng,
+        locationUpdatedAt,
+      },
+    });
+    res.json({
+      location: { ...location, updatedAt: locationUpdatedAt.toISOString() },
+    });
   } catch (e) {
     next(e);
   }
@@ -244,7 +344,7 @@ driverRouter.post("/pools", async (req, res, next) => {
     if (!requestsShareCorridor(requests)) {
       throw errors.conflict(
         "INCOMPATIBLE",
-        "These trips cannot share a Tesla (matching rule)"
+        "These trips travel in opposite directions or do not share a compatible corridor"
       );
     }
 
@@ -432,7 +532,7 @@ driverRouter.post("/pools/:id/requests", async (req, res, next) => {
     if (!requestsShareCorridor([...members.map((member) => member.request), ...requests])) {
       throw errors.conflict(
         "INCOMPATIBLE",
-        "One or more trips do not fit this pool's corridor"
+        "One or more trips travel in an opposite direction or do not fit this pool's corridor"
       );
     }
 

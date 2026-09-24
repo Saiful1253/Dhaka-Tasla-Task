@@ -29,6 +29,16 @@ export interface Area {
   lng: number;
 }
 
+/** A predefined area center used by the driver's schematic route signal. */
+export interface MapLocation {
+  lat: number;
+  lng: number;
+}
+
+export interface DriverLocation extends MapLocation {
+  updatedAt: string | null;
+}
+
 export interface Fare {
   id: number;
   requestId: number;
@@ -98,6 +108,7 @@ export interface DriverVehicle {
   name: string;
   capacity: number;
   isOnline: boolean;
+  location: DriverLocation | null;
 }
 
 export interface DriverRequest {
@@ -105,6 +116,8 @@ export interface DriverRequest {
   passenger: Pick<User, "id" | "name">;
   pickup: string;
   dest: string;
+  pickupLocation: MapLocation;
+  destLocation: MapLocation;
   seats: number;
   status: RideStatus;
   estimatedFareTaka: number | null;
@@ -115,6 +128,10 @@ export interface DriverRequest {
     fitsActivePool: boolean | null;
     addableToActivePool: boolean;
     compatibleRequestIds: number[];
+    driverDistanceKm: number | null;
+    nearDriver: boolean;
+    suggested: boolean;
+    suggestionReason: "MATCHES_ACTIVE_POOL" | "NEAR_DRIVER" | null;
   };
 }
 
@@ -172,6 +189,8 @@ export interface DriverPoolMember {
   passenger: Pick<User, "id" | "name">;
   pickup: string;
   dest: string;
+  pickupLocation: MapLocation;
+  destLocation: MapLocation;
   seats: number;
   fareTaka: number;
   status: RideStatus;
@@ -259,6 +278,14 @@ export function normalizeDriverPool(pool: RawDriverPool): DriverPool {
       passenger: member.request.passenger,
       pickup: member.request.pickupArea.name,
       dest: member.request.destArea.name,
+      pickupLocation: {
+        lat: member.request.pickupArea.lat,
+        lng: member.request.pickupArea.lng,
+      },
+      destLocation: {
+        lat: member.request.destArea.lat,
+        lng: member.request.destArea.lng,
+      },
       seats: member.seats,
       fareTaka: member.fareTaka,
       status: member.request.status,
