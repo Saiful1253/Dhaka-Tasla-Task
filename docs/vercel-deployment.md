@@ -6,7 +6,7 @@ Dhaka Tesla Pool can run on Vercel without Docker:
 Browser → Next.js (Vercel) → /api/backend rewrite → Express (Vercel) → managed PostgreSQL
 ```
 
-The repository already has the required entry points and Prisma migrations. Vercel can detect the Express server at `backend/src/server.ts` and the Next.js app in `frontend/`.
+The repository already has the required entry points and Prisma migrations. The backend project uses `backend/api/index.ts` plus `backend/vercel.json`; the frontend project uses the Next.js app in `frontend/`.
 
 ## 1. Create the database
 
@@ -30,10 +30,10 @@ Use the provider's direct/non-pooling URL for the one-time migration command if 
 Create one Vercel project from the GitHub repository with:
 
 - **Root Directory:** `backend`
-- **Framework:** Node.js (the Express server is detected automatically)
+- **Framework:** Node.js (`api/index.ts` is the serverless function entry)
 - **Install/Build:** the repository defaults (`npm install`, `npm run build`)
 
-The backend `postinstall` script runs `prisma generate`, so the Prisma client is available in the Vercel build. The server is stateless; do not run migrations or seed data during every cold start.
+The backend `postinstall` script runs `prisma generate`, so the Prisma client is available in the Vercel build. `vercel.json` rewrites API requests to the checked-in Express function. The server is stateless; do not run migrations or seed data during every cold start.
 
 ## 3. Apply the database schema
 

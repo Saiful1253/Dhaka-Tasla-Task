@@ -6,7 +6,7 @@ import {
 
 import { LoaderCircle } from "lucide-react";
 
-type ButtonVariant = "primary" | "secondary" | "lime" | "danger" | "ghost";
+type ButtonVariant = "primary" | "secondary" | "lime" | "danger" | "ghost" | "inverse";
 type ButtonSize = "sm" | "md" | "lg" | "icon";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -26,6 +26,8 @@ const variantClasses: Record<ButtonVariant, string> = {
   danger:
     "bg-coral text-ink border-coral hover:bg-[#F47B70] hover:border-[#F47B70]",
   ghost: "bg-transparent text-ink border-transparent hover:bg-ink/5",
+  inverse:
+    "border-porcelain/25 bg-porcelain/10 text-porcelain hover:border-cyan/70 hover:bg-porcelain/20",
 };
 
 const sizeClasses: Record<ButtonSize, string> = {

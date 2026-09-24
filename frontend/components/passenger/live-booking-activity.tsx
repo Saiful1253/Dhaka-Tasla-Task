@@ -42,6 +42,7 @@ export function LiveBookingActivity() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [staleSnapshot, setStaleSnapshot] = useState(false);
   const [now, setNow] = useState(0);
   const loadRef = useRef<((mode: LoadMode) => Promise<void>) | null>(null);
 
@@ -65,12 +66,15 @@ export function LiveBookingActivity() {
         });
         if (disposed || controller.signal.aborted) return;
         setActivity(data);
+        setError(null);
+        setStaleSnapshot(false);
         setNow(Date.now());
       } catch (requestError) {
         if (disposed || controller.signal.aborted || isAbortError(requestError)) {
           return;
         }
         setError(requestError);
+        setStaleSnapshot(true);
       } finally {
         inFlight = false;
         if (!disposed && !controller.signal.aborted) {
@@ -104,11 +108,13 @@ export function LiveBookingActivity() {
     ? "Loading live booking activity…"
     : refreshing
       ? "Refreshing live booking activity…"
-      : error && hasSnapshot
-        ? "Last refresh failed; showing the last snapshot"
-        : error
-          ? "Live activity is unavailable; retry when ready"
-          : "Live updates every 5 seconds";
+      : !hasSnapshot && staleSnapshot
+        ? "Live activity is unavailable; retry when ready"
+        : staleSnapshot
+          ? "Last refresh failed; showing the last snapshot"
+          : error
+            ? "Live activity is unavailable; retry when ready"
+            : "Live updates every 5 seconds";
 
   return (
     <section
@@ -138,16 +144,15 @@ export function LiveBookingActivity() {
             aria-live="polite"
             aria-atomic="true"
           >
-            <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.16em] text-cyan">
+            <span className="font-mono text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.16em] text-cyan">
               Live total
             </span>
-            <span
-              className="font-display text-3xl font-bold leading-none tracking-[-0.06em] text-lime tabular-nums"
-            >
-              {activity?.activeCount ?? 0}
+            <span className="font-display text-3xl font-bold leading-none tracking-[-0.06em] text-lime tabular-nums">
+              {activity ? activity.activeCount : "—"}
             </span>
+            {!activity ? <span className="sr-only">Awaiting first live total</span> : null}
           </div>
-          <p className="font-mono text-[9px] uppercase tracking-[0.12em] text-porcelain/80">
+          <p className="font-mono text-[10px] sm:text-[11px] uppercase tracking-[0.12em] text-porcelain/80">
             {activity ? (
               <time dateTime={activity.refreshedAt}>
                 Updated {formatAge(activity.refreshedAt, now)}
@@ -157,13 +162,12 @@ export function LiveBookingActivity() {
             )}
           </p>
           <Button
-            variant="secondary"
-            size="sm"
+            variant="inverse"
+            size="md"
             loading={refreshing}
             disabled={loading}
             onClick={() => void loadRef.current?.("manual")}
             aria-label="Refresh live booking activity"
-            className="border-porcelain/20 bg-porcelain/5 text-porcelain hover:border-porcelain/35 hover:bg-porcelain/10"
             leadingIcon={
               <RefreshCw
                 aria-hidden="true"
@@ -187,7 +191,7 @@ export function LiveBookingActivity() {
         </div>
 
         <p
-          className="mt-4 flex items-center gap-2 font-mono text-[9px] font-semibold uppercase tracking-[0.13em] text-ink/80"
+          className="mt-4 flex items-center gap-2 font-mono text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.13em] text-ink/80"
           role="status"
           aria-live="polite"
           aria-atomic="true"
@@ -202,12 +206,12 @@ export function LiveBookingActivity() {
             title={hasSnapshot ? "Live activity could not refresh" : "Live activity is unavailable"}
             message={getErrorMessage(error)}
             code={getErrorCode(error)}
-            onDismiss={() => setError(null)}
+            onDismiss={hasSnapshot ? () => setError(null) : undefined}
             className="mt-5"
           >
             <Button
               variant="secondary"
-              size="sm"
+              size="md"
               onClick={() => void loadRef.current?.("manual")}
               className="mt-3"
               leadingIcon={<RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />}
@@ -233,21 +237,35 @@ export function LiveBookingActivity() {
           </div>
         ) : null}
 
-        {!loading && !hasSnapshot && !error ? (
-          <EmptyState
-            title="No other requests right now"
-            message="When another passenger is actively requesting a ride, their route will appear here anonymously."
-            icon={<Activity aria-hidden="true" className="h-5 w-5" />}
+        {!hasSnapshot && !loading && !error ? (
+          <NoticeBanner
+            tone="error"
+            title="Live activity is unavailable"
+            message="No live snapshot has been confirmed yet. Retry to check the current board."
             className="mt-5"
-          />
+          >
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={() => void loadRef.current?.("manual")}
+              className="mt-3"
+              leadingIcon={<RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />}
+            >
+              Retry activity
+            </Button>
+          </NoticeBanner>
         ) : null}
 
         {hasSnapshot ? (
           requests.length === 0 ? (
             !loading ? (
               <EmptyState
-                title="No other requests right now"
-                message="The board is quiet. A new anonymous route will appear here as soon as it is requested."
+                title={staleSnapshot ? "Last snapshot had no requests" : "No other requests right now"}
+                message={
+                  staleSnapshot
+                    ? "The last successful refresh showed no requests. Refresh again to confirm the current board."
+                    : "The board is quiet. A new anonymous route will appear here as soon as it is requested."
+                }
                 icon={<Activity aria-hidden="true" className="h-5 w-5" />}
                 className="mt-5"
               />
@@ -261,7 +279,7 @@ export function LiveBookingActivity() {
                     {activeLabel(activity.activeCount)}
                   </h3>
                 </div>
-                <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-ink/65">
+                <p className="font-mono text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.12em] text-ink/65">
                   {activity.activeCount > requests.length
                     ? `Showing newest ${requests.length}`
                     : "All active requests shown"}
@@ -284,36 +302,38 @@ export function LiveBookingActivity() {
 function ActivityRow({ request, now }: { request: RideActivity; now: number }) {
   return (
     <li className="animate-reveal py-5">
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_160px] lg:gap-8">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.15em] text-ink/65">
-              {activityLabel(request.activityId)}
-            </p>
-            <p className="font-mono text-[9px] font-medium uppercase tracking-[0.1em] text-ink/65">
-              Requested{" "}
-              <time
-                dateTime={request.createdAt}
-                title={formatDateTime(request.createdAt)}
-                className="text-ink"
-              >
-                {formatAge(request.createdAt, now)}
-              </time>
-            </p>
-          </div>
+      <div className="grid gap-5 lg:max-w-[62rem] lg:grid-cols-[minmax(17rem,24rem)_minmax(10rem,14rem)_9rem] lg:items-start lg:gap-6">
+        <div className="order-2 min-w-0 lg:order-1">
           <RouteDisplay
             pickup={request.pickup}
             destination={request.destination}
             pickupLabel="Pickup"
             destinationLabel="Destination"
             compact
-            className="mt-4"
+            labelClassName="text-[10px] sm:text-[11px]"
+            className="mt-0 lg:max-w-[24rem]"
           />
         </div>
 
-        <div className="flex items-end border-t border-ink/10 pt-4 lg:block lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+        <div className="order-1 flex min-w-0 flex-col gap-2 lg:order-2 lg:border-l lg:border-ink/10 lg:pl-5">
+          <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.15em] text-ink/70 sm:text-[11px]">
+            {activityLabel(request.activityId)}
+          </p>
+          <p className="font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-ink/70 sm:text-[11px]">
+            Requested{" "}
+            <time
+              dateTime={request.createdAt}
+              title={formatDateTime(request.createdAt)}
+              className="text-ink"
+            >
+              {formatAge(request.createdAt, now)}
+            </time>
+          </p>
+        </div>
+
+        <div className="order-3 flex items-end border-t border-ink/10 pt-4 lg:block lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
           <div>
-            <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-ink/65">
+            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink/70 sm:text-[11px]">
               Seats requested
             </p>
             <p className="mt-1 flex items-center gap-2 font-display text-xl font-bold tracking-[-0.04em] text-ink">
@@ -321,7 +341,7 @@ function ActivityRow({ request, now }: { request: RideActivity; now: number }) {
               {request.seats} {request.seats === 1 ? "seat" : "seats"}
             </p>
           </div>
-          <p className="mt-2 flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.1em] text-ink/65 lg:mt-5">
+          <p className="mt-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-ink/70 sm:text-[11px] lg:mt-5">
             <Clock3 aria-hidden="true" className="h-3.5 w-3.5" />
             Live request
           </p>

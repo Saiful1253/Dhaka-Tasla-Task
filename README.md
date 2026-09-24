@@ -519,7 +519,7 @@ Browser → Next.js (frontend project) → /api/backend rewrite → Express (bac
 ```
 
 1. Create a managed PostgreSQL database (Vercel Postgres, Neon, Supabase, or equivalent) and set `DATABASE_URL` in the backend project. Use the provider's direct URL for the one-time migration if it supplies separate pooled/direct URLs.
-2. Create the backend Vercel project with **Root Directory** `backend`. Vercel detects the Express server at `backend/src/server.ts`; set `JWT_SECRET`, `NODE_ENV=production`, and the fare variables. Do not run migrations or seed on every serverless cold start.
+2. Create the backend Vercel project with **Root Directory** `backend`. The checked-in `backend/api/index.ts` exports the Express app and `backend/vercel.json` routes requests to that Node 20 function; set `JWT_SECRET`, `NODE_ENV=production`, and the fare variables. Do not run migrations or seed on every serverless cold start.
 3. Apply the checked-in schema from a trusted shell: `cd backend && npm ci && npm run prisma:migrate`. Run `npm run seed` only for a demo database; the seeded `tesla123` accounts are not suitable for a real public deployment.
 4. Create the frontend Vercel project with **Root Directory** `frontend`. Set `BACKEND_API_URL` to the deployed API origin and keep `NEXT_PUBLIC_API_URL=/api/backend` so the Next.js same-origin rewrite avoids browser CORS configuration.
 5. Verify the API `https://YOUR-BACKEND.vercel.app/health`, frontend login, and the `/api/backend` proxy before sharing the URL.

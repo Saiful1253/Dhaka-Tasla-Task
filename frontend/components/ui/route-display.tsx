@@ -7,6 +7,7 @@ interface RouteDisplayProps {
   destinationLabel?: string;
   compact?: boolean;
   inverse?: boolean;
+  labelClassName?: string;
   className?: string;
 }
 
@@ -17,6 +18,7 @@ export function RouteDisplay({
   destinationLabel = "Destination",
   compact = false,
   inverse = false,
+  labelClassName = "",
   className = "",
 }: RouteDisplayProps) {
   return (
@@ -33,7 +35,7 @@ export function RouteDisplay({
         />
         <div className="min-w-0">
           <p
-            className={`font-mono text-[9px] font-semibold uppercase tracking-[0.18em] ${
+            className={`font-mono text-[9px] font-semibold uppercase tracking-[0.18em] ${labelClassName} ${
               inverse ? "text-cyan/70" : "text-ink/65"
             }`}
           >
@@ -61,7 +63,7 @@ export function RouteDisplay({
         />
         <div className="min-w-0">
           <p
-            className={`font-mono text-[9px] font-semibold uppercase tracking-[0.18em] ${
+            className={`font-mono text-[9px] font-semibold uppercase tracking-[0.18em] ${labelClassName} ${
               inverse ? "text-lime/70" : "text-ink/65"
             }`}
           >
