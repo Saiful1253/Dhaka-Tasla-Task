@@ -6,6 +6,7 @@ import { requireAuth, requireRole } from "../middleware/auth";
 import { config } from "../config";
 import { errors } from "../lib/errors";
 import { computeFare } from "../lib/fare";
+import { recalculatePoolFaresTx } from "../lib/pool-fares";
 import { assertCancellable } from "../lib/transitions";
 
 export const rideRouter = Router();
@@ -286,6 +287,9 @@ rideRouter.delete("/:id", async (req, res, next) => {
             note: "Passenger cancelled and released their seats",
           },
         });
+        // Re-run the server fare rules after the membership write so a pool
+        // dropping from two passengers to one removes the remaining discount.
+        await recalculatePoolFaresTx(tx, member.poolId);
       }
     }, interactiveTransactionOptions);
 

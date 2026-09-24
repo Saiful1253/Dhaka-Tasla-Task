@@ -342,7 +342,7 @@ describe("5. Cancellation rules hold", () => {
     expect(row!.status).toBe("CANCELLED");
   });
 
-  it("cancel while MATCHED releases the seats", async () => {
+  it("cancel while MATCHED releases seats and recalculates the remaining solo fare", async () => {
     await prisma.rideRequest.deleteMany({});
     await prisma.pool.deleteMany({});
 
@@ -355,6 +355,19 @@ describe("5. Cancellation rules hold", () => {
     const poolId = poolRes.body.pool.id;
     expect(poolRes.body.pool.seatsTaken).toBe(2);
 
+    const pooled = await prisma.rideRequest.findUnique({
+      where: { id: r.id },
+      include: { fare: true, pickupArea: true, destArea: true, poolMembers: true },
+    });
+    const pooledExpected = computeFare({
+      pickup: { lat: pooled!.pickupArea.lat, lng: pooled!.pickupArea.lng },
+      dest: { lat: pooled!.destArea.lat, lng: pooled!.destArea.lng },
+      poolSize: 2,
+    });
+    expect(pooled!.fare!.discountTaka).toBeGreaterThan(0);
+    expect(pooled!.fare!.totalTaka).toBe(pooledExpected.totalTaka);
+    expect(pooled!.poolMembers[0].fareTaka).toBe(pooledExpected.totalTaka);
+
     const res = await request(app)
       .delete(`/rides/${n.id}`)
       .set("Authorization", `Bearer ${nusratToken}`);
@@ -362,6 +375,30 @@ describe("5. Cancellation rules hold", () => {
 
     const pool = await prisma.pool.findUnique({ where: { id: poolId } });
     expect(pool!.seatsTaken).toBe(1); // Nusrat's seat freed
+
+    const remaining = await prisma.rideRequest.findUnique({
+      where: { id: r.id },
+      include: { fare: true, pickupArea: true, destArea: true, poolMembers: true },
+    });
+    const soloExpected = computeFare({
+      pickup: { lat: remaining!.pickupArea.lat, lng: remaining!.pickupArea.lng },
+      dest: { lat: remaining!.destArea.lat, lng: remaining!.destArea.lng },
+      poolSize: 1,
+    });
+    expect(remaining!.fare!.discountTaka).toBe(0);
+    expect(remaining!.fare!.totalTaka).toBe(soloExpected.totalTaka);
+    expect(remaining!.poolMembers[0].fareTaka).toBe(soloExpected.totalTaka);
+
+    const details = await request(app)
+      .get(`/pools/${poolId}`)
+      .set("Authorization", `Bearer ${rafiqToken}`);
+    expect(details.status).toBe(200);
+    const own = details.body.pool.members.find(
+      (member: { isMe: boolean }) => member.isMe,
+    );
+    expect(own.myFareTaka).toBe(soloExpected.totalTaka);
+    expect(own.myFare.discountTaka).toBe(0);
+    expect(own.myFare.totalTaka).toBe(soloExpected.totalTaka);
   });
 
   it("cannot cancel once the trip is STARTED", async () => {

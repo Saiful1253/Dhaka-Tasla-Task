@@ -238,6 +238,10 @@ export function PassengerDashboard() {
 
   const selectedPoolId = selectedRide?.pool?.id ?? null;
   useEffect(() => {
+    // Do not carry a prior ride's manifest (or total) into a newly selected ride.
+    setSelectedPool(null);
+  }, [selectedPoolId]);
+  useEffect(() => {
     if (!selectedPoolId) {
       setSelectedPool(null);
       setPoolError(null);
@@ -365,6 +369,11 @@ export function PassengerDashboard() {
 
   const canCancelSelected =
     selectedRide?.status === "REQUESTED" || selectedRide?.status === "MATCHED";
+  const currentPoolMember = selectedPool?.members.find((member) => member.isMe) ?? null;
+  const currentPoolTotalTaka =
+    currentPoolMember?.myFareTaka ?? currentPoolMember?.myFare?.totalTaka ?? null;
+  const currentPoolDiscountTaka = currentPoolMember?.myFare?.discountTaka ?? 0;
+  const currentPoolHasDiscount = currentPoolDiscountTaka > 0;
 
   return (
     <div className="min-h-screen bg-paper text-ink">
@@ -496,7 +505,7 @@ export function PassengerDashboard() {
                   <div className="mt-6 border-t border-ink/10 pt-5">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <p className="font-display text-xs font-bold uppercase tracking-[0.13em] text-ink">
-                        Live fare estimate
+                        Solo fare estimate
                       </p>
                       <button
                         type="button"
@@ -524,7 +533,12 @@ export function PassengerDashboard() {
                         </div>
                       </div>
                     ) : estimate ? (
-                      <FareBreakdown fare={estimate} className="border border-ink/10 bg-paper/70 p-5" />
+                      <FareBreakdown
+                        fare={estimate}
+                        caption="Solo estimate"
+                        totalLabel="Solo estimate"
+                        className="border border-ink/10 bg-paper/70 p-5"
+                      />
                     ) : (
                       <div className="border border-dashed border-ink/20 bg-paper/50 p-5 text-center">
                         <MapPin aria-hidden="true" className="mx-auto h-5 w-5 text-ink/35" />
@@ -604,7 +618,12 @@ export function PassengerDashboard() {
 
                       <div className="flex flex-col">
                         {selectedRide.fare ? (
-                          <FareBreakdown fare={selectedRide.fare} compact caption="Your private fare" />
+                          <FareBreakdown
+                            fare={selectedRide.fare}
+                            compact
+                            caption="Your final fare"
+                            totalLabel="Your final fare"
+                          />
                         ) : (
                           <EmptyState
                             title="Fare unavailable"
@@ -629,6 +648,35 @@ export function PassengerDashboard() {
                           </div>
                           {selectedPool ? <StatusBadge status={selectedPool.status} compact /> : null}
                         </div>
+
+                        {selectedPool && currentPoolMember && currentPoolTotalTaka !== null ? (
+                          <div
+                            className="mt-4 border border-ink/15 bg-ink p-4 text-porcelain sm:p-5"
+                            aria-live="polite"
+                            aria-atomic="true"
+                          >
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                              <div>
+                                <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.18em] text-cyan/80">
+                                  {currentPoolHasDiscount ? "YOUR DISCOUNTED TOTAL" : "YOUR FINAL TOTAL"}
+                                </p>
+                                <p className="mt-2 font-display text-4xl font-bold leading-none tracking-[-0.07em] tabular-nums text-porcelain sm:text-5xl">
+                                  {formatTaka(currentPoolTotalTaka)}
+                                </p>
+                              </div>
+                              {currentPoolHasDiscount ? (
+                                <p className="font-mono text-xs font-semibold uppercase tracking-[0.12em] text-lime">
+                                  You saved {formatTaka(currentPoolDiscountTaka)}
+                                </p>
+                              ) : null}
+                            </div>
+                            <p className="mt-3 border-t border-porcelain/15 pt-3 text-[11px] leading-5 text-porcelain/65">
+                              {currentPoolHasDiscount
+                                ? "Pool discount applied · your final amount"
+                                : "No pool discount · your final amount"}
+                            </p>
+                          </div>
+                        ) : null}
 
                         {poolLoading && !selectedPool ? (
                           <div className="mt-4 space-y-3" role="status" aria-label="Loading pool manifest">

@@ -9,8 +9,8 @@ import { z } from "zod";
 import { prisma, interactiveTransactionOptions } from "../lib/prisma";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { errors } from "../lib/errors";
-import { computeFare } from "../lib/fare";
 import { areCompatible } from "../lib/matching";
+import { recalculatePoolFaresTx } from "../lib/pool-fares";
 import { assertPoolTransition } from "../lib/transitions";
 
 type Tx = Prisma.TransactionClient;
@@ -36,50 +36,6 @@ async function claimSeatsTx(
        AND seats_taken + ${seats} <= capacity
        AND status IN ('REQUESTED', 'MATCHED')`;
   return updated === 1;
-}
-
-/** Recompute every member's individual fare inside the membership transaction. */
-async function recalcFaresTx(tx: Tx, poolId: number) {
-  const pool = await tx.pool.findUnique({
-    where: { id: poolId },
-    include: {
-      members: {
-        include: {
-          request: { include: { pickupArea: true, destArea: true, fare: true } },
-        },
-      },
-    },
-  });
-  if (!pool || pool.members.length === 0) return;
-
-  // The business rule keys the discount off the number of pooled requests,
-  // while seat capacity is independently counted by `seats`.
-  const poolSize = pool.members.length;
-  for (const member of pool.members) {
-    const fare = computeFare({
-      pickup: {
-        lat: member.request.pickupArea.lat,
-        lng: member.request.pickupArea.lng,
-      },
-      dest: { lat: member.request.destArea.lat, lng: member.request.destArea.lng },
-      poolSize,
-    });
-
-    if (member.request.fare) {
-      await tx.fare.update({
-        where: { id: member.request.fare.id },
-        data: {
-          discountTaka: fare.discountTaka,
-          totalTaka: fare.totalTaka,
-          distanceKm: fare.distanceKm,
-        },
-      });
-    }
-    await tx.poolMember.update({
-      where: { id: member.id },
-      data: { fareTaka: fare.totalTaka },
-    });
-  }
 }
 
 async function guardPool(poolId: number) {
@@ -337,7 +293,7 @@ driverRouter.post("/pools", async (req, res, next) => {
         },
       });
 
-      await recalcFaresTx(tx, p.id);
+      await recalculatePoolFaresTx(tx, p.id);
       return p;
     }, interactiveTransactionOptions);
 
@@ -464,7 +420,7 @@ driverRouter.post("/pools/:id/requests", async (req, res, next) => {
           note: `Driver manually added ${requests.length} compatible passenger request(s)`,
         },
       });
-      await recalcFaresTx(tx, poolId);
+      await recalculatePoolFaresTx(tx, poolId);
       return poolId;
     }, interactiveTransactionOptions);
 

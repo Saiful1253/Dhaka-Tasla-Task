@@ -14,6 +14,7 @@ interface FareBreakdownProps {
   fare: FareValues;
   compact?: boolean;
   caption?: string;
+  totalLabel?: string;
   className?: string;
 }
 
@@ -21,6 +22,7 @@ export function FareBreakdown({
   fare,
   compact = false,
   caption = "Fare breakdown",
+  totalLabel = "Final fare",
   className = "",
 }: FareBreakdownProps) {
   return (
@@ -47,12 +49,14 @@ export function FareBreakdown({
             {formatTaka(fare.distanceTaka)}
           </dd>
         </div>
-        <div className="flex items-center justify-between gap-4 text-sm">
-          <dt className="text-ink/60">Pool adjustment</dt>
-          <dd className="font-mono font-medium tabular-nums text-[#2B6811]">
-            −{formatTaka(fare.discountTaka)}
-          </dd>
-        </div>
+        {fare.discountTaka > 0 ? (
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <dt className="text-ink/60">Pool discount</dt>
+            <dd className="font-mono font-medium tabular-nums text-[#2B6811]">
+              −{formatTaka(fare.discountTaka)}
+            </dd>
+          </div>
+        ) : null}
       </dl>
       <div
         className={`mt-4 flex items-end justify-between gap-4 border-t border-dashed border-ink/25 pt-4 ${
@@ -61,11 +65,11 @@ export function FareBreakdown({
       >
         <div>
           <p className="font-display text-xs font-bold uppercase tracking-[0.12em] text-ink/65">
-            Your total
+            {totalLabel}
           </p>
           <p className="mt-1 text-[11px] text-ink/65">Whole Taka · no hidden split</p>
         </div>
-        <p className="font-display text-3xl font-bold leading-none tracking-[-0.06em] text-ink sm:text-4xl">
+        <p className="font-display text-3xl font-bold leading-none tracking-[-0.06em] tabular-nums text-ink sm:text-4xl">
           {formatTaka(fare.totalTaka)}
         </p>
       </div>
