@@ -446,6 +446,8 @@ Base URL: local `http://localhost:4000` or the deployed Vercel API origin · Aut
 | GET | `/rides/activity` | passenger | privacy-safe anonymous view of other waiting routes; read-only |
 | GET | `/rides/:id` | passenger (owner) | own ride + own fare (403 for others) |
 | DELETE | `/rides/:id` | passenger (owner) | cancel while `REQUESTED`/`MATCHED`, releases seats atomically |
+| DELETE | `/rides/history/:id` | passenger (owner) | remove one completed/cancelled ride from personal history |
+| DELETE | `/rides/history` | passenger (owner) | remove all completed/cancelled rides from personal history |
 
 ### Driver & pool
 | Method | Path | Auth | Description |
@@ -455,6 +457,8 @@ Base URL: local `http://localhost:4000` or the deployed Vercel API origin · Aut
 | POST | `/driver/pools` | driver | manually assign selected `{requestIds}` — atomic capacity check |
 | POST | `/driver/pools/:id/requests` | driver (owner) | manually add selected compatible passengers before arrival |
 | GET | `/driver/pools` | driver | my pools, passengers, seats, events |
+| DELETE | `/driver/history/:id` | driver (owner) | remove one completed/cancelled pool from dispatch history |
+| DELETE | `/driver/history` | driver (owner) | remove all completed/cancelled pools from dispatch history |
 | POST | `/driver/pools/:id/arrived\|start\|complete\|cancel` | driver (owner) | guarded lifecycle → 409 on illegal move |
 | GET | `/pools/:id` | driver or assigned member | roster + own fare only (`myFareTaka`) |
 | GET | `/health` | — | liveness (local/Docker or Vercel API) |

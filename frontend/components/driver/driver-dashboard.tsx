@@ -12,6 +12,7 @@ import {
   Radio,
   RefreshCw,
   Route,
+  Trash2,
   UsersRound,
   WifiOff,
 } from "lucide-react";
@@ -61,6 +62,12 @@ interface MutationResponse {
   status: string;
 }
 
+interface HistoryDeleteResponse {
+  ok: true;
+  id?: number;
+  deletedCount: number;
+}
+
 const ACTION_TOAST: Record<Exclude<PoolAction, "cancel">, string> = {
   arrived: "Driver-arrived status saved. The next step is starting the ride.",
   start: "Ride started. Every passenger can now follow the in-motion status.",
@@ -85,6 +92,8 @@ function getActionErrorTitle(error: unknown): string {
     case "POOL_CLOSED":
     case "REQUEST_UNAVAILABLE":
     case "CANCEL_NOT_ALLOWED":
+    case "HISTORY_NOT_DELETABLE":
+    case "HISTORY_CHANGED":
     case "TRANSACTION_RETRY":
       return "Dispatch state changed";
     default:
@@ -122,6 +131,9 @@ export function DriverDashboard() {
   const [actionPending, setActionPending] = useState<string | null>(null);
   const [now, setNow] = useState(0);
   const [cancelPool, setCancelPool] = useState<DriverPool | null>(null);
+  const [deletePool, setDeletePool] = useState<DriverPool | null>(null);
+  const [deleteAllHistoryOpen, setDeleteAllHistoryOpen] = useState(false);
+  const [deletingHistory, setDeletingHistory] = useState(false);
 
   const activePools = useMemo(
     () => pools.filter((pool) => !isTerminalPool(pool.status)),
@@ -351,6 +363,57 @@ export function DriverDashboard() {
       setActionError(error);
     } finally {
       setActionPending(null);
+    }
+
+    await refreshAfterMutation();
+  }
+
+  async function confirmPoolHistoryDeletion() {
+    if (!deletePool || deletingHistory) return;
+    const poolId = deletePool.id;
+    setDeletingHistory(true);
+    setActionError(null);
+    try {
+      await apiFetch<HistoryDeleteResponse>(`/driver/history/${poolId}`, {
+        method: "DELETE",
+        auth: true,
+      });
+      setDeletePool(null);
+      showToast({
+        tone: "success",
+        message: `Pool #${poolId} was removed from your dispatch history.`,
+      });
+    } catch (error) {
+      setDeletePool(null);
+      setActionError(error);
+    } finally {
+      setDeletingHistory(false);
+    }
+
+    await refreshAfterMutation();
+  }
+
+  async function confirmDeleteAllHistory() {
+    if (deletingHistory) return;
+    setDeletingHistory(true);
+    setActionError(null);
+    try {
+      const data = await apiFetch<HistoryDeleteResponse>("/driver/history", {
+        method: "DELETE",
+        auth: true,
+      });
+      setDeleteAllHistoryOpen(false);
+      showToast({
+        tone: "success",
+        message:
+          data.deletedCount === 1
+            ? "1 closed pool was removed from your dispatch history."
+            : `${data.deletedCount} closed pools were removed from your dispatch history.`,
+      });
+    } catch (error) {
+      setActionError(error);
+    } finally {
+      setDeletingHistory(false);
     }
 
     await refreshAfterMutation();
@@ -727,6 +790,7 @@ export function DriverDashboard() {
                       actionPending={actionPending}
                       onAction={(poolId, action) => void handlePoolAction(poolId, action)}
                       onCancel={setCancelPool}
+                       onDeleteHistory={setDeletePool}
                     />
                   ))}
                 </div>
@@ -741,9 +805,22 @@ export function DriverDashboard() {
                     Pool history
                   </h2>
                 </div>
-                <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.13em] text-ink/65">
-                  {historicalPools.length} closed {historicalPools.length === 1 ? "pool" : "pools"}
-                </span>
+                <div className="flex flex-col items-start gap-3 sm:items-end">
+                  <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.13em] text-ink/65">
+                    {historicalPools.length} closed {historicalPools.length === 1 ? "pool" : "pools"}
+                  </span>
+                  {historicalPools.length > 0 ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setDeleteAllHistoryOpen(true)}
+                      disabled={deletingHistory}
+                      leadingIcon={<Trash2 aria-hidden="true" className="h-3.5 w-3.5" />}
+                    >
+                      Delete all history
+                    </Button>
+                  ) : null}
+                </div>
               </div>
 
               {historicalPools.length === 0 ? (
@@ -762,6 +839,7 @@ export function DriverDashboard() {
                       actionPending={actionPending}
                       onAction={(poolId, action) => void handlePoolAction(poolId, action)}
                       onCancel={setCancelPool}
+                       onDeleteHistory={setDeletePool}
                     />
                   ))}
                 </div>
@@ -776,9 +854,32 @@ export function DriverDashboard() {
         title={`Cancel pool #${cancelPool?.id ?? ""}?`}
         description="The backend only allows this while the pool is matched. The manifest will be retained in history."
         confirmLabel="Cancel pool"
+        cancelLabel="Keep pool"
         busy={actionPending === `${cancelPool?.id}:cancel`}
         onConfirm={() => void confirmPoolCancellation()}
         onCancel={() => setCancelPool(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(deletePool)}
+        title={`Remove pool #${deletePool?.id ?? ""} from history?`}
+        description="This hides this completed or cancelled manifest from your dispatch history. Active pools cannot be removed."
+        confirmLabel="Remove pool"
+        cancelLabel="Keep history"
+        busy={deletingHistory}
+        onConfirm={() => void confirmPoolHistoryDeletion()}
+        onCancel={() => setDeletePool(null)}
+      />
+
+      <ConfirmDialog
+        open={deleteAllHistoryOpen}
+        title="Delete all closed-pool history?"
+        description="This removes every completed or cancelled pool from your dispatch history. Active pools stay untouched."
+        confirmLabel="Delete all history"
+        cancelLabel="Keep history"
+        busy={deletingHistory}
+        onConfirm={() => void confirmDeleteAllHistory()}
+        onCancel={() => setDeleteAllHistoryOpen(false)}
       />
 
       {toast ? (

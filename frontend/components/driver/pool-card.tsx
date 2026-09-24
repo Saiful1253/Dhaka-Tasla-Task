@@ -11,6 +11,7 @@ import {
   MapPin,
   Play,
   Radio,
+  Trash2,
   UsersRound,
   XCircle,
 } from "lucide-react";
@@ -28,6 +29,7 @@ interface PoolCardProps {
   actionPending: string | null;
   onAction: (poolId: number, action: Exclude<PoolAction, "cancel">) => void;
   onCancel: (pool: DriverPool) => void;
+  onDeleteHistory: (pool: DriverPool) => void;
 }
 
 interface NextAction {
@@ -47,6 +49,7 @@ export function PoolCard({
   actionPending,
   onAction,
   onCancel,
+  onDeleteHistory,
 }: PoolCardProps) {
   const nextAction = NEXT_ACTION[pool.status];
   const remaining = pool.capacity - pool.seatsTaken;
@@ -224,6 +227,19 @@ export function PoolCard({
                   : "This manifest was cancelled and retained for history."}
               </p>
             )}
+
+            {pool.status === "COMPLETED" || pool.status === "CANCELLED" ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-3"
+                disabled={Boolean(actionPending)}
+                onClick={() => onDeleteHistory(pool)}
+                leadingIcon={<Trash2 aria-hidden="true" className="h-3.5 w-3.5" />}
+              >
+                Remove from history
+              </Button>
+            ) : null}
 
             {pool.status === "MATCHED" ? (
               <button

@@ -13,6 +13,16 @@ export const rideRouter = Router();
 
 /** Keep the live board useful without turning it into an unbounded directory. */
 const ACTIVITY_LIMIT = 20;
+const TERMINAL_RIDE_STATUSES = ["COMPLETED", "CANCELLED"] as const;
+
+function assertHistoryDeletable(status: string): void {
+  if (!TERMINAL_RIDE_STATUSES.includes(status as (typeof TERMINAL_RIDE_STATUSES)[number])) {
+    throw errors.conflict(
+      "HISTORY_NOT_DELETABLE",
+      "Only completed or cancelled rides can be removed from history",
+    );
+  }
+}
 
 /**
  * A display token only. HMAC keeps a sequential request id from being exposed
@@ -194,7 +204,7 @@ rideRouter.post("/", async (req, res, next) => {
 rideRouter.get("/", async (req, res, next) => {
   try {
     const rides = await prisma.rideRequest.findMany({
-      where: { passengerId: req.user!.id },
+      where: { passengerId: req.user!.id, deletedAt: null },
       orderBy: { createdAt: "desc" },
       include: {
         fare: true,
@@ -228,7 +238,7 @@ rideRouter.get("/:id", async (req, res, next) => {
         poolMembers: { include: { pool: true } },
       },
     });
-    if (!ride) throw errors.notFound("Ride");
+    if (!ride || ride.deletedAt) throw errors.notFound("Ride");
     if (ride.passengerId !== req.user!.id) throw errors.forbidden();
 
     res.json({
@@ -243,6 +253,52 @@ rideRouter.get("/:id", async (req, res, next) => {
   }
 });
 
+/** DELETE /rides/history - remove every completed/cancelled ride from my history. */
+rideRouter.delete("/history", async (req, res, next) => {
+  try {
+    const result = await prisma.rideRequest.updateMany({
+      where: {
+        passengerId: req.user!.id,
+        status: { in: [...TERMINAL_RIDE_STATUSES] },
+        deletedAt: null,
+      },
+      data: { deletedAt: new Date() },
+    });
+    res.json({ ok: true, deletedCount: result.count });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** DELETE /rides/history/:id - remove one completed/cancelled ride from my history. */
+rideRouter.delete("/history/:id", async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const ride = await prisma.rideRequest.findFirst({
+      where: { id, passengerId: req.user!.id, deletedAt: null },
+    });
+    if (!ride) throw errors.notFound("Ride");
+    assertHistoryDeletable(ride.status);
+
+    const result = await prisma.rideRequest.updateMany({
+      where: {
+        id,
+        passengerId: req.user!.id,
+        status: { in: [...TERMINAL_RIDE_STATUSES] },
+        deletedAt: null,
+      },
+      data: { deletedAt: new Date() },
+    });
+    if (result.count !== 1) {
+      throw errors.conflict("HISTORY_CHANGED", "This ride changed while it was being removed");
+    }
+
+    res.json({ ok: true, id, deletedCount: result.count });
+  } catch (e) {
+    next(e);
+  }
+});
+
 /**
  * DELETE /rides/:id - cancel while valid (REQUESTED or MATCHED only).
  * Seats held by this passenger are released atomically.
@@ -251,7 +307,7 @@ rideRouter.delete("/:id", async (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const ride = await prisma.rideRequest.findUnique({ where: { id } });
-    if (!ride) throw errors.notFound("Ride");
+    if (!ride || ride.deletedAt) throw errors.notFound("Ride");
     if (ride.passengerId !== req.user!.id) throw errors.forbidden();
 
     assertCancellable(ride.status);

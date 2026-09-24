@@ -14,6 +14,7 @@ import {
   Search,
   Send,
   TicketCheck,
+  Trash2,
   UserRound,
   XCircle,
 } from "lucide-react";
@@ -58,6 +59,12 @@ interface CancelResponse {
   status: "CANCELLED";
 }
 
+interface HistoryDeleteResponse {
+  ok: true;
+  id?: number;
+  deletedCount: number;
+}
+
 interface PoolDetailsResponse {
   pool: PassengerPoolDetails;
 }
@@ -89,6 +96,9 @@ export function PassengerDashboard() {
   const [pollingNow, setPollingNow] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [historyDeleteId, setHistoryDeleteId] = useState<number | null>(null);
+  const [deleteAllHistoryOpen, setDeleteAllHistoryOpen] = useState(false);
+  const [deletingHistory, setDeletingHistory] = useState(false);
 
   const selectedRide = useMemo(
     () => rides.find((ride) => ride.id === selectedRideId) ?? null,
@@ -325,6 +335,67 @@ export function PassengerDashboard() {
     }
   }
 
+  async function confirmHistoryDeletion() {
+    if (historyDeleteId === null || deletingHistory) return;
+    setDeletingHistory(true);
+    try {
+      await apiFetch<HistoryDeleteResponse>(
+        `/rides/history/${historyDeleteId}`,
+        { method: "DELETE", auth: true },
+      );
+      setHistoryDeleteId(null);
+      showToast({
+        tone: "success",
+        message: `Ride #${historyDeleteId} was removed from your history.`,
+      });
+      try {
+        await refreshRides();
+      } catch {
+        // The confirmed removal remains visible locally if the refresh fails.
+      }
+    } catch (error) {
+      showToast({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not remove this ride from history.",
+        code: getErrorCode(error),
+      });
+    } finally {
+      setDeletingHistory(false);
+    }
+  }
+
+  async function confirmDeleteAllHistory() {
+    if (deletingHistory) return;
+    setDeletingHistory(true);
+    try {
+      const data = await apiFetch<HistoryDeleteResponse>("/rides/history", {
+        method: "DELETE",
+        auth: true,
+      });
+      setDeleteAllHistoryOpen(false);
+      showToast({
+        tone: "success",
+        message:
+          data.deletedCount === 1
+            ? "1 completed ride was removed from your history."
+            : `${data.deletedCount} completed rides were removed from your history.`,
+      });
+      try {
+        await refreshRides();
+      } catch {
+        // Keep the local board usable if the follow-up read is unavailable.
+      }
+    } catch (error) {
+      showToast({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not clear your ride history.",
+        code: getErrorCode(error),
+      });
+    } finally {
+      setDeletingHistory(false);
+    }
+  }
+
   async function confirmCancellation() {
     if (!selectedRide) return;
     setCancelling(true);
@@ -369,6 +440,8 @@ export function PassengerDashboard() {
 
   const canCancelSelected =
     selectedRide?.status === "REQUESTED" || selectedRide?.status === "MATCHED";
+  const historyCount = rides.filter((ride) => isTerminalRide(ride.status)).length;
+  const canDeleteAllHistory = historyCount > 0;
   const currentPoolMember = selectedPool?.members.find((member) => member.isMe) ?? null;
   const currentPoolTotalTaka =
     currentPoolMember?.myFareTaka ?? currentPoolMember?.myFare?.totalTaka ?? null;
@@ -808,10 +881,23 @@ export function PassengerDashboard() {
                     Your ride history
                   </h2>
                 </div>
-                <p className="flex items-center gap-2 font-mono text-[9px] font-semibold uppercase tracking-[0.13em] text-ink/65">
-                  <CalendarDays aria-hidden="true" className="h-4 w-4" />
-                  {rides.length} {rides.length === 1 ? "ride" : "rides"} · newest first
-                </p>
+                <div className="flex flex-col items-start gap-3 sm:items-end">
+                  <p className="flex items-center gap-2 font-mono text-[9px] font-semibold uppercase tracking-[0.13em] text-ink/65">
+                    <CalendarDays aria-hidden="true" className="h-4 w-4" />
+                    {rides.length} {rides.length === 1 ? "ride" : "rides"} · newest first
+                  </p>
+                  {canDeleteAllHistory ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setDeleteAllHistoryOpen(true)}
+                      disabled={deletingHistory}
+                      leadingIcon={<Trash2 aria-hidden="true" className="h-3.5 w-3.5" />}
+                    >
+                      Delete all history
+                    </Button>
+                  ) : null}
+                </div>
               </div>
 
               {rides.length === 0 ? (
@@ -826,45 +912,62 @@ export function PassengerDashboard() {
                   {rides.map((ride) => {
                     const active = ride.id === selectedRideId;
                     return (
-                      <button
+                      <div
                         key={ride.id}
-                        type="button"
-                        onClick={() => setSelectedRideId(ride.id)}
-                        className={`group grid w-full gap-4 p-4 text-left transition hover:bg-paper/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan sm:grid-cols-[96px_minmax(0,1fr)_auto] sm:items-center sm:p-5 ${
+                        className={`group transition hover:bg-paper/70 ${
                           active ? "bg-lime/10" : ""
                         }`}
-                        aria-label={`View ride ${ride.id} from ${ride.pickupArea.name} to ${ride.destArea.name}`}
-                        aria-pressed={active}
                       >
-                        <div>
-                          <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.14em] text-ink/65">
-                            Ride ticket
-                          </p>
-                          <p className="mt-1 font-display text-xl font-bold tracking-[-0.04em]">
-                            #{String(ride.id).padStart(4, "0")}
-                          </p>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-start gap-2 text-sm font-semibold text-ink">
-                            <MapPin aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-ink/65" />
-                            <span className="break-words">
-                              {ride.pickupArea.name}
-                              <ArrowDownToLine aria-hidden="true" className="mx-2 inline h-3.5 w-3.5 -translate-y-px text-ink/35" />
-                              {ride.destArea.name}
-                            </span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRideId(ride.id)}
+                          className="grid w-full gap-4 p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan sm:grid-cols-[96px_minmax(0,1fr)_auto] sm:items-center sm:p-5"
+                          aria-label={`View ride ${ride.id} from ${ride.pickupArea.name} to ${ride.destArea.name}`}
+                          aria-pressed={active}
+                        >
+                          <div>
+                            <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.14em] text-ink/65">
+                              Ride ticket
+                            </p>
+                            <p className="mt-1 font-display text-xl font-bold tracking-[-0.04em]">
+                              #{String(ride.id).padStart(4, "0")}
+                            </p>
                           </div>
-                          <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.11em] text-ink/65">
-                            {formatDateTime(ride.createdAt)} · {ride.seatsRequested}{" "}
-                            {ride.seatsRequested === 1 ? "seat" : "seats"}
-                          </p>
-                        </div>
-                        <div className="flex items-center justify-between gap-4 sm:justify-end">
-                          <StatusBadge status={ride.status} compact />
-                          <p className="min-w-20 text-right font-mono text-base font-semibold tabular-nums text-ink">
-                            {ride.fare ? formatTaka(ride.fare.totalTaka) : "—"}
-                          </p>
-                        </div>
-                      </button>
+                          <div className="min-w-0">
+                            <div className="flex items-start gap-2 text-sm font-semibold text-ink">
+                              <MapPin aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-ink/65" />
+                              <span className="break-words">
+                                {ride.pickupArea.name}
+                                <ArrowDownToLine aria-hidden="true" className="mx-2 inline h-3.5 w-3.5 -translate-y-px text-ink/35" />
+                                {ride.destArea.name}
+                              </span>
+                            </div>
+                            <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.11em] text-ink/65">
+                              {formatDateTime(ride.createdAt)} · {ride.seatsRequested}{" "}
+                              {ride.seatsRequested === 1 ? "seat" : "seats"}
+                            </p>
+                          </div>
+                          <div className="flex items-center justify-between gap-4 sm:justify-end">
+                            <StatusBadge status={ride.status} compact />
+                            <p className="min-w-20 text-right font-mono text-base font-semibold tabular-nums text-ink">
+                              {ride.fare ? formatTaka(ride.fare.totalTaka) : "—"}
+                            </p>
+                          </div>
+                        </button>
+                        {isTerminalRide(ride.status) ? (
+                          <div className="flex justify-end border-t border-ink/10 px-4 pb-3 sm:px-5">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setHistoryDeleteId(ride.id)}
+                              disabled={deletingHistory}
+                              leadingIcon={<Trash2 aria-hidden="true" className="h-3.5 w-3.5" />}
+                            >
+                              Remove from history
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
                     );
                   })}
                 </div>
@@ -879,9 +982,32 @@ export function PassengerDashboard() {
         title={`Cancel ride #${selectedRide?.id ?? ""}?`}
         description="This releases your held seats immediately. The cancellation cannot be undone."
         confirmLabel="Cancel ride"
+        cancelLabel="Keep ride"
         busy={cancelling}
         onConfirm={() => void confirmCancellation()}
         onCancel={() => setCancelOpen(false)}
+      />
+
+      <ConfirmDialog
+        open={historyDeleteId !== null}
+        title={`Remove ride #${historyDeleteId ?? ""} from history?`}
+        description="This hides this completed or cancelled ride from your personal history. Active rides cannot be removed."
+        confirmLabel="Remove ride"
+        cancelLabel="Keep history"
+        busy={deletingHistory}
+        onConfirm={() => void confirmHistoryDeletion()}
+        onCancel={() => setHistoryDeleteId(null)}
+      />
+
+      <ConfirmDialog
+        open={deleteAllHistoryOpen}
+        title="Delete all completed history?"
+        description="This removes every completed or cancelled ride from your personal history. Active and waiting rides stay untouched."
+        confirmLabel="Delete all history"
+        cancelLabel="Keep history"
+        busy={deletingHistory}
+        onConfirm={() => void confirmDeleteAllHistory()}
+        onCancel={() => setDeleteAllHistoryOpen(false)}
       />
 
       {toast ? (

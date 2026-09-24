@@ -10,6 +10,7 @@ interface ConfirmDialogProps {
   title: string;
   description: string;
   confirmLabel: string;
+  cancelLabel?: string;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -23,6 +24,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
+  cancelLabel = "Keep it active",
   busy = false,
   onConfirm,
   onCancel,
@@ -119,7 +121,7 @@ export function ConfirmDialog({
         </p>
         <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <Button ref={cancelRef} variant="secondary" onClick={onCancel} disabled={busy}>
-            Keep it active
+            {cancelLabel}
           </Button>
           <Button variant="danger" onClick={onConfirm} loading={busy}>
             {confirmLabel}

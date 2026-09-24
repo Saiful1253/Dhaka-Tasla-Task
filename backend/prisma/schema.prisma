@@ -95,6 +95,7 @@ model RideRequest {
   seatsRequested Int       @default(1) @map("seats_requested")
   status         RideStatus @default(REQUESTED)
   createdAt      DateTime  @default(now()) @map("created_at")
+  deletedAt      DateTime? @map("deleted_at")
 
   passenger User      @relation(fields: [passengerId], references: [id], onDelete: Cascade)
   pickupArea Area     @relation("pickupArea", fields: [pickupAreaId], references: [id])
@@ -104,6 +105,7 @@ model RideRequest {
   fare        Fare?
 
   @@index([passengerId])
+  @@index([passengerId, deletedAt])
   @@index([status])
   @@map("ride_requests")
 }
@@ -115,6 +117,7 @@ model Pool {
   capacity    Int // snapshot of vehicle capacity at pool creation
   seatsTaken  Int        @default(0) @map("seats_taken")
   createdAt   DateTime   @default(now()) @map("created_at")
+  deletedAt   DateTime?  @map("deleted_at")
   startedAt   DateTime?  @map("started_at")
   completedAt DateTime?  @map("completed_at")
 
@@ -125,6 +128,7 @@ model Pool {
   // capacity guard lives in the UPDATE statement (atomic) + this CHECK as a second net
   @@index([status])
   @@index([vehicleId])
+  @@index([vehicleId, deletedAt])
   @@map("pools")
 }
 

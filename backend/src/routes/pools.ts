@@ -39,8 +39,8 @@ async function claimSeatsTx(
 }
 
 async function guardPool(poolId: number) {
-  const pool = await prisma.pool.findUnique({
-    where: { id: poolId },
+  const pool = await prisma.pool.findFirst({
+    where: { id: poolId, deletedAt: null },
     include: { vehicle: true },
   });
   if (!pool) throw errors.notFound("Pool");
@@ -80,6 +80,16 @@ const openPoolSchema = z.object({
     .transform((ids) => [...new Set(ids)]),
 });
 const addRequestsSchema = openPoolSchema;
+const TERMINAL_POOL_STATUSES = ["COMPLETED", "CANCELLED"] as const;
+
+function assertPoolHistoryDeletable(status: string): void {
+  if (!TERMINAL_POOL_STATUSES.includes(status as (typeof TERMINAL_POOL_STATUSES)[number])) {
+    throw errors.conflict(
+      "HISTORY_NOT_DELETABLE",
+      "Only completed or cancelled pools can be removed from history",
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Driver endpoints
@@ -98,7 +108,7 @@ driverRouter.get("/requests", async (req, res, next) => {
 
     const [open, activePool] = await Promise.all([
       prisma.rideRequest.findMany({
-        where: { status: "REQUESTED" },
+        where: { status: "REQUESTED", deletedAt: null },
         include: {
           passenger: { select: { id: true, name: true } },
           pickupArea: true,
@@ -310,7 +320,7 @@ driverRouter.post("/pools", async (req, res, next) => {
 driverRouter.get("/pools", async (req, res, next) => {
   try {
     const pools = await prisma.pool.findMany({
-      where: { vehicle: { driverId: req.user!.id } },
+      where: { vehicle: { driverId: req.user!.id }, deletedAt: null },
       orderBy: { createdAt: "desc" },
       include: {
         vehicle: true,
@@ -329,6 +339,53 @@ driverRouter.get("/pools", async (req, res, next) => {
       },
     });
     res.json({ pools });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** DELETE /driver/history - remove every completed/cancelled pool from my history. */
+driverRouter.delete("/history", async (req, res, next) => {
+  try {
+    const result = await prisma.pool.updateMany({
+      where: {
+        vehicle: { driverId: req.user!.id },
+        status: { in: [...TERMINAL_POOL_STATUSES] },
+        deletedAt: null,
+      },
+      data: { deletedAt: new Date() },
+    });
+    res.json({ ok: true, deletedCount: result.count });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** DELETE /driver/history/:id - remove one completed/cancelled pool from my history. */
+driverRouter.delete("/history/:id", async (req, res, next) => {
+  try {
+    const poolId = Number(req.params.id);
+    const pool = await prisma.pool.findFirst({
+      where: { id: poolId, vehicle: { driverId: req.user!.id }, deletedAt: null },
+      select: { id: true, status: true },
+    });
+    if (!pool) throw errors.notFound("Pool");
+    assertPoolHistoryDeletable(pool.status);
+
+    const result = await prisma.pool.updateMany({
+      where: {
+        id: poolId,
+        vehicle: { driverId: req.user!.id },
+        status: { in: [...TERMINAL_POOL_STATUSES] },
+        deletedAt: null,
+      },
+      data: { deletedAt: new Date() },
+    });
+    if (result.count !== 1) {
+      throw errors.conflict("HISTORY_CHANGED", "This pool changed while it was being removed");
+    }
+
+    res.json({ ok: true, id: poolId, deletedCount: result.count });
   } catch (e) {
     next(e);
   }
@@ -361,7 +418,7 @@ driverRouter.post("/pools/:id/requests", async (req, res, next) => {
         include: { request: { include: { pickupArea: true, destArea: true } } },
       }),
       prisma.rideRequest.findMany({
-        where: { id: { in: requestIds }, status: "REQUESTED" },
+        where: { id: { in: requestIds }, status: "REQUESTED", deletedAt: null },
         include: { pickupArea: true, destArea: true },
       }),
     ]);
@@ -533,7 +590,7 @@ membershipRouter.get("/pools/:id", async (req, res, next) => {
         events: { orderBy: { at: "asc" } },
       },
     });
-    if (!pool) throw errors.notFound("Pool");
+    if (!pool || pool.deletedAt) throw errors.notFound("Pool");
 
     const isDriver = pool.vehicle.driverId === req.user!.id;
     const isMember = pool.members.some(
