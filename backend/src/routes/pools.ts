@@ -9,7 +9,11 @@ import { z } from "zod";
 import { prisma, interactiveTransactionOptions } from "../lib/prisma";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { errors } from "../lib/errors";
-import { areCompatible } from "../lib/matching";
+import {
+  areCompatible,
+  areParallelRoutes,
+  buildRoutePlan,
+} from "../lib/matching";
 import { haversineKm } from "../lib/geo";
 import { config } from "../config";
 import { recalculatePoolFaresTx } from "../lib/pool-fares";
@@ -54,6 +58,8 @@ function assertDriverOwns(vehicleDriverId: number, userId: number) {
 }
 
 type RouteRequest = {
+  id: number;
+  createdAt: Date;
   pickupArea: { lat: number; lng: number };
   destArea: { lat: number; lng: number };
 };
@@ -66,12 +72,14 @@ function tripEnds(route: RouteRequest) {
 }
 
 function requestsShareCorridor(routes: RouteRequest[]): boolean {
-  // Compatibility is pairwise. Checking every route against the first member
-  // alone is incorrect when nearby pickup groups overlap in a larger manifest.
-  return routes.every((route, index) =>
-    routes
-      .slice(index + 1)
-      .every((other) => areCompatible(tripEnds(route), tripEnds(other))),
+  return (
+    buildRoutePlan(
+      routes.map((route) => ({
+        id: route.id,
+        createdAt: route.createdAt,
+        ...tripEnds(route),
+      }))
+    ) !== null
   );
 }
 
@@ -135,6 +143,7 @@ driverRouter.get("/requests", async (req, res, next) => {
             include: {
               request: { include: { pickupArea: true, destArea: true } },
             },
+            orderBy: { createdAt: "asc" },
           },
         },
         orderBy: { createdAt: "desc" },
@@ -167,10 +176,12 @@ driverRouter.get("/requests", async (req, res, next) => {
         : null;
 
     // The queue is already oldest-first. Pick the first nearby request that
-    // can also fit the active corridor, then expose it as a one-click suggestion.
-    const suggestedRequestId =
+    // can also fit the active corridor, then group only requests that travel
+    // on the same leg. A chained Uttara -> Mirpur request is suggested after
+    // the driver reaches Uttara, rather than being mixed into the first leg.
+    const suggestionCandidates =
       vehicle.isOnline && driverLocation
-        ? open.find((request) => {
+        ? open.filter((request) => {
             const distance = distanceToDriver(request.pickupArea);
             const fitsActivePool = activePool
               ? requestsShareCorridor([...activeRoutes, request])
@@ -182,8 +193,32 @@ driverRouter.get("/requests", async (req, res, next) => {
               (!activePool || activePool.status === "MATCHED") &&
               fitsActivePool
             );
-          })?.id ?? null
-        : null;
+          })
+        : [];
+    const suggestedRequest = suggestionCandidates[0] ?? null;
+    const suggestedGroup: typeof open = [];
+
+    if (suggestedRequest) {
+      let suggestedSeats = 0;
+      for (const request of suggestionCandidates) {
+        const sameLeg = areParallelRoutes(
+          tripEnds(suggestedRequest),
+          tripEnds(request)
+        );
+        if (!sameLeg) continue;
+        if (suggestedSeats + request.seatsRequested > remainingSeats) continue;
+        if (
+          activePool &&
+          !requestsShareCorridor([...activeRoutes, ...suggestedGroup, request])
+        ) {
+          continue;
+        }
+        suggestedGroup.push(request);
+        suggestedSeats += request.seatsRequested;
+      }
+    }
+
+    const suggestedRequestIds = suggestedGroup.map((request) => request.id);
 
     res.json({
       vehicle: {
@@ -193,6 +228,7 @@ driverRouter.get("/requests", async (req, res, next) => {
         isOnline: vehicle.isOnline,
         location: driverLocation,
       },
+      suggestedRequestIds,
       requests: open.map((r) => {
         const fitsActivePool = activePool
           ? requestsShareCorridor([...activeRoutes, r])
@@ -227,13 +263,12 @@ driverRouter.get("/requests", async (req, res, next) => {
               .map((other) => other.id),
             driverDistanceKm,
             nearDriver,
-            suggested: r.id === suggestedRequestId,
-            suggestionReason:
-              r.id === suggestedRequestId
-                ? activePool
-                  ? "MATCHES_ACTIVE_POOL"
-                  : "NEAR_DRIVER"
-                : null,
+            suggested: suggestedRequestIds.includes(r.id),
+            suggestionReason: suggestedRequestIds.includes(r.id)
+              ? activePool
+                ? "MATCHES_ACTIVE_POOL"
+                : "NEAR_DRIVER"
+              : null,
           },
         };
       }),
@@ -331,6 +366,7 @@ driverRouter.post("/pools", async (req, res, next) => {
     const requests = await prisma.rideRequest.findMany({
       where: { id: { in: requestIds }, status: "REQUESTED" },
       include: { pickupArea: true, destArea: true },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
     if (requests.length !== requestIds.length) {
       throw errors.conflict(
@@ -434,6 +470,7 @@ driverRouter.get("/pools", async (req, res, next) => {
               },
             },
           },
+          orderBy: { createdAt: "asc" },
         },
         events: { orderBy: { at: "asc" } },
       },
@@ -516,10 +553,12 @@ driverRouter.post("/pools/:id/requests", async (req, res, next) => {
       prisma.poolMember.findMany({
         where: { poolId },
         include: { request: { include: { pickupArea: true, destArea: true } } },
+        orderBy: { createdAt: "asc" },
       }),
       prisma.rideRequest.findMany({
         where: { id: { in: requestIds }, status: "REQUESTED", deletedAt: null },
         include: { pickupArea: true, destArea: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       }),
     ]);
 

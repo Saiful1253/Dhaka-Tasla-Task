@@ -20,5 +20,7 @@ export const config = {
     destRadiusKm: 4.0,
     /** routes heading this far apart are treated as materially opposite */
     oppositeDirectionAngleDeg: 135,
+    /** a route may continue when its pickup is at/near the previous destination */
+    routeHandoffRadiusKm: 2.5,
   },
 };
