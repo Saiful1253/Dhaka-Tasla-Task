@@ -574,7 +574,13 @@ flowchart LR
 - **Accepted suggestion:** SVG schematic map instead of a map API — kept the project simple and key-free
 - **Rejected AI suggestion:**
 
+
 1. Proposed adding a version column to pools for optimistic locking
 2. Rejected because the existing atomic UPDATE ... WHERE seats_taken + $n <= capacity already prevents overbooking at the database level
 3. Rejected because the unique partial index on pools already ensures only one active pool per vehicle
 4. Adding version would require an extra migration and more query plumbing
+
+
+## 🎥 Project Walkthrough Video
+
+[Watch the 10-Minute Project Walkthrough](https://drive.google.com/file/d/19kVCx9k0DkZk9-S-Rh5Y22HGYGjULDaL/view?usp=drive_link)
