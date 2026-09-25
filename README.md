@@ -568,3 +568,13 @@ flowchart LR
 - **Rejected/changed suggestion:** do not add a map provider, WebSocket service, queue, or generic component library for this MVP. The brief explicitly values a simple area/corridor model and five-second polling, so those additions would increase infrastructure without improving the required evaluator story.
 
 ---
+## Ai Usage 
+
+- **Tools used:** GitHub Copilot and an AI assistant
+- **Accepted suggestion:** SVG schematic map instead of a map API — kept the project simple and key-free
+- **Rejected AI suggestion:**
+
+1. Proposed adding a version column to pools for optimistic locking
+2. Rejected because the existing atomic UPDATE ... WHERE seats_taken + $n <= capacity already prevents overbooking at the database level
+3. Rejected because the unique partial index on pools already ensures only one active pool per vehicle
+4. Adding version would require an extra migration and more query plumbing
